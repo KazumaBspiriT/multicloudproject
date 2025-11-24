@@ -1,4 +1,5 @@
-# Private S3 + CloudFront (OAC). HTTPS CDN URL, account-level Block Public Access can stay ON.
+# modules/aws-static/main.tf
+# Private S3 + CloudFront (OAC). HTTPS CDN URL; account-level Block Public Access may remain ON.
 
 resource "random_string" "suffix" {
   length  = 4
@@ -20,7 +21,9 @@ resource "aws_s3_bucket" "site" {
 
 resource "aws_s3_bucket_ownership_controls" "own" {
   bucket = aws_s3_bucket.site.id
-  rule { object_ownership = "BucketOwnerPreferred" }
+  rule {
+    object_ownership = "BucketOwnerPreferred"
+  }
 }
 
 resource "aws_s3_bucket_public_access_block" "bpa" {
@@ -31,7 +34,7 @@ resource "aws_s3_bucket_public_access_block" "bpa" {
   restrict_public_buckets = true
 }
 
-# 2) CloudFront OAC
+# 2) CloudFront OAC (so CloudFront can read the private S3 origin)
 resource "aws_cloudfront_origin_access_control" "oac" {
   name                              = "${var.project_name}-oac"
   description                       = "OAC for private S3 origin"
@@ -40,7 +43,7 @@ resource "aws_cloudfront_origin_access_control" "oac" {
   signing_protocol                  = "sigv4"
 }
 
-# 3) CloudFront distribution (serves index.html)
+# 3) CloudFront distribution (serves index.html over HTTPS)
 resource "aws_cloudfront_distribution" "cdn" {
   enabled             = true
   price_class         = "PriceClass_100"
@@ -60,11 +63,17 @@ resource "aws_cloudfront_distribution" "cdn" {
 
     forwarded_values {
       query_string = false
-      cookies { forward = "none" }
+      cookies {
+        forward = "none"
+      }
     }
   }
 
-  restrictions { geo_restriction { restriction_type = "none" } }
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
 
   viewer_certificate {
     cloudfront_default_certificate = true
@@ -73,13 +82,20 @@ resource "aws_cloudfront_distribution" "cdn" {
   depends_on = [aws_s3_bucket_public_access_block.bpa]
 }
 
-# 4) Bucket policy: allow ONLY this CloudFront distribution to read objects (not public!)
+# 4) Bucket policy: allow ONLY this CloudFront distribution to read (not public!)
 data "aws_iam_policy_document" "cf_read" {
   statement {
-    sid = "AllowCloudFrontRead"
-    principals { type = "Service", identifiers = ["cloudfront.amazonaws.com"] }
-    actions   = ["s3:GetObject"]
-    resources = ["${aws_s3_bucket.site.arn}/*"]
+    sid     = "AllowCloudFrontRead"
+    actions = ["s3:GetObject"]
+    resources = [
+      "${aws_s3_bucket.site.arn}/*"
+    ]
+
+    principals {
+      type        = "Service"
+      identifiers = ["cloudfront.amazonaws.com"]
+    }
+
     condition {
       test     = "StringEquals"
       variable = "AWS:SourceArn"
@@ -105,7 +121,9 @@ locals {
 resource "null_resource" "upload" {
   count = length(local.content_files) == 0 ? 0 : 1
 
-  triggers = { content_hash = local.content_hash }
+  triggers = {
+    content_hash = local.content_hash
+  }
 
   provisioner "local-exec" {
     command = "aws s3 sync ${local.content_dir} s3://${aws_s3_bucket.site.id} --delete"
@@ -114,9 +132,15 @@ resource "null_resource" "upload" {
   depends_on = [
     aws_s3_bucket_ownership_controls.own,
     aws_s3_bucket_public_access_block.bpa,
-    aws_s3_bucket_policy.site,
+    aws_s3_bucket_policy.site
   ]
 }
 
-output "bucket_name"   { value = aws_s3_bucket.site.bucket }
-output "cloudfront_url" { value = "https://${aws_cloudfront_distribution.cdn.domain_name}" }
+# Outputs
+output "bucket_name" {
+  value = aws_s3_bucket.site.bucket
+}
+
+output "cloudfront_url" {
+  value = "https://${aws_cloudfront_distribution.cdn.domain_name}"
+}
