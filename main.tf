@@ -65,15 +65,25 @@ module "aws_static" {
 }
 
 # -----------------
-# Placeholder Modules for Azure/GCP (These calls are currently empty)
+# Placeholder Modules for Azure/GCP (Now passing required placeholder arguments)
 # -----------------
 
 module "aks" {
   count  = var.target_cloud == "azure" && var.deployment_mode == "k8s" ? 1 : 0
   source = "./modules/aks" 
+  
+  # ARGUMENTS ADDED HERE to satisfy modules/aks/variables.tf
+  project_name      = var.project_name
+  azure_region      = var.azure_region
+  cluster_version   = var.cluster_version
 }
 
 module "gke" {
   count  = var.target_cloud == "gcp" && var.deployment_mode == "k8s" ? 1 : 0
   source = "./modules/gke" 
+  
+  # ARGUMENTS ADDED HERE to satisfy modules/gke/variables.tf
+  project_name      = var.project_name
+  gcp_region        = var.gcp_region
+  cluster_version   = var.cluster_version
 }
