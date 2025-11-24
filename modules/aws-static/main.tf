@@ -23,7 +23,7 @@ resource "aws_s3_bucket_website_configuration" "website_config" {
   bucket = aws_s3_bucket.website_bucket.id
 
   index_document { suffix = "index.html" }
-  error_document { key = "404.html" }
+  error_document { key    = "404.html" }
 }
 
 # 3) Public access settings (website endpoints require public reads if you don’t use CloudFront)
@@ -35,12 +35,11 @@ resource "aws_s3_bucket_public_access_block" "public_access" {
   restrict_public_buckets = false
 }
 
-# 4) Bucket policy: public read of objects
+# 4) Bucket policy: public read of objects (policy-only, no ACLs on objects)
 data "aws_iam_policy_document" "allow_public_read" {
   statement {
     actions   = ["s3:GetObject"]
     resources = ["${aws_s3_bucket.website_bucket.arn}/*"]
-
     principals {
       type        = "*"
       identifiers = ["*"]
@@ -57,8 +56,9 @@ resource "aws_s3_bucket_policy" "public_read_policy" {
 locals {
   content_dir   = abspath(var.static_content_path)
   content_files = fileset(local.content_dir, "**")
-  # put the conditional on one line to avoid HCL parsing issues on some setups
-  content_hash  = length(local.content_files) == 0 ? "empty" : sha256(join("", [for f in local.content_files : filesha256("${local.content_dir}/${f}")]))
+  content_hash  = length(local.content_files) == 0 ? "empty" : sha256(join("", [
+    for f in local.content_files : filesha256("${local.content_dir}/${f}")
+  ]))
 }
 
 # 6) Upload local site files (requires awscli on the runner/machine running terraform)
@@ -71,7 +71,8 @@ resource "null_resource" "upload_files" {
   }
 
   provisioner "local-exec" {
-    command = "aws s3 sync ${local.content_dir} s3://${aws_s3_bucket.website_bucket.id} --delete --acl public-read"
+    # removed "--acl public-read" because the bucket is policy-only (ACLs disabled)
+    command = "aws s3 sync ${local.content_dir} s3://${aws_s3_bucket.website_bucket.id} --delete"
   }
 
   depends_on = [
