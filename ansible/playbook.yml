@@ -1,0 +1,15 @@
+# ansible/playbook.yml
+
+- name: Configure Kubernetes Cluster and Deploy Application
+  hosts: localhost # We run Ansible locally against the cluster via kubectl
+  connection: local
+  gather_facts: no
+  
+  tasks:
+    - name: Ensure environment is ready
+      ansible.builtin.debug:
+        msg: "Starting cluster configuration for deployment mode: {{ deployment_mode }}"
+
+  roles:
+    - k8s_addons
+    - sample_app

@@ -1,0 +1,122 @@
+# .github/workflows/deploy.yml
+
+name: Multi-Cloud Deployment Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_cloud:
+        description: 'Target Cloud (aws, azure, gcp)'
+        required: true
+        default: 'aws'
+      deployment_mode:
+        description: 'Deployment Mode (k8s or static)'
+        required: true
+        default: 'k8s'
+      
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+      
+      # Time Tracking Start [cite: 35]
+      - name: Start Provisioning Timer
+        id: timer_start
+        run: echo "::set-output name=start::$(date +%s)"
+      
+      ## 1. Terraform Provisioning ##
+      - name: Configure AWS Credentials (for AWS only)
+        if: ${{ inputs.target_cloud == 'aws' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-2 # Use the fixed region
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init and Plan
+        id: plan
+        run: |
+          terraform init
+          terraform plan -var="target_cloud=${{ inputs.target_cloud }}" -var="deployment_mode=${{ inputs.deployment_mode }}" -out=tfplan.out
+
+      - name: Terraform Apply (Provisioning)
+        id: apply
+        run: terraform apply tfplan.out
+
+      # Get Kubeconfig for K8s mode [cite: 91]
+      - name: Get Kubeconfig Output
+        if: ${{ inputs.deployment_mode == 'k8s' }}
+        id: kubeconfig
+        run: |
+          KUBECONFIG_RAW=$(terraform output -raw kubeconfig_raw)
+          echo "KUBECONFIG_RAW=$KUBECONFIG_RAW" >> $GITHUB_ENV
+          echo "$KUBECONFIG_RAW" > kubeconfig.yaml
+          
+      # Get Website URL for Static mode
+      - name: Get Static Website URL Output
+        if: ${{ inputs.deployment_mode == 'static' }}
+        id: website_url
+        run: echo "WEBSITE_URL=$(terraform output -raw website_url)" >> $GITHUB_ENV
+
+      # --- Measure Provisioning Time ---
+      - name: Measure Provisioning Time
+        id: time_provisioning
+        run: |
+          end=$(date +%s)
+          start=${{ steps.timer_start.outputs.start }}
+          echo "::set-output name=duration::$((end - start))"
+          echo "Provisioning Time: $((end - start)) seconds"
+          
+      ## 2. Ansible Configuration (K8s Mode Only) ##
+      - name: Setup Python and Ansible
+        if: ${{ inputs.deployment_mode == 'k8s' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+          
+      - name: Install Ansible and Kubernetes requirements
+        if: ${{ inputs.deployment_mode == 'k8s' }}
+        run: |
+          pip install ansible kubernetes openshift jmespath
+          ansible-galaxy collection install kubernetes.core community.general
+
+      - name: Run Ansible Configuration and Deployment
+        if: ${{ inputs.deployment_mode == 'k8s' }}
+        id: configure
+        env:
+          KUBECONFIG: kubeconfig.yaml # Pass the kubeconfig file location
+        run: |
+          ansible-playbook -i ansible/inventory.yml ansible/playbook.yml \
+            --extra-vars "deployment_mode=${{ inputs.deployment_mode }}"
+      
+      ## 3. Smoke Test ##
+      - name: Run Smoke Test (K8s)
+        if: ${{ inputs.deployment_mode == 'k8s' }}
+        uses: jakejarvis/wait-for-url@v3
+        with:
+          url: 'http://${{ steps.kubeconfig.outputs.cluster_endpoint }}/health' # Replace with actual Ingress endpoint/path
+          timeout: 300 # Wait up to 5 minutes for the LoadBalancer and Ingress to be ready
+          
+      - name: Run Smoke Test (Static)
+        if: ${{ inputs.deployment_mode == 'static' }}
+        uses: jakejarvis/wait-for-url@v3
+        with:
+          url: ${{ env.WEBSITE_URL }}
+          timeout: 60
+          
+      ## 4. Cleanup (Crucial for Cost Management) ##
+      - name: Terraform Destroy
+        run: terraform destroy -auto-approve -var="target_cloud=${{ inputs.target_cloud }}" -var="deployment_mode=${{ inputs.deployment_mode }}"
+
+      # Final Time Tracking and Metrics Collection
+      - name: Publish Metrics (Simplified)
+        run: |
+          echo "--- FINAL METRICS ---"
+          echo "Cloud: ${{ inputs.target_cloud }}, Mode: ${{ inputs.deployment_mode }}"
+          echo "Provisioning Time (s): ${{ steps.time_provisioning.outputs.duration }}"
+          # Add cost estimation here based on runtime duration and resource size [cite: 35, 66]

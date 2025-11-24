@@ -1,0 +1,26 @@
+# ansible/roles/k8s_addons/tasks/main.yml
+
+- name: Install NGINX Ingress Controller using Helm
+  kubernetes.core.helm:
+    name: ingress-nginx
+    chart_ref: ingress-nginx/ingress-nginx
+    release_namespace: ingress-nginx
+    create_namespace: true
+    state: present
+    # values: # Add custom values if needed, e.g., to configure AWS ELB type
+  register: ingress_install
+  [cite_start]retries: 5 # Use retries for transient API hiccups [cite: 97]
+  delay: 10
+  until: ingress_install is not failed
+
+- name: Wait for NGINX Ingress Controller LoadBalancer to provision (AWS)
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Service
+    name: ingress-nginx-controller
+    namespace: ingress-nginx
+  register: ingress_service
+  until: ingress_service.resources[0].status.loadBalancer.ingress is defined
+  retries: 30
+  delay: 10
+  # Note: Provisioning the AWS Load Balancer can take the longest [cite: 110, 113]
