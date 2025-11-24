@@ -1,45 +1,79 @@
-# variables.tf (Root)
+# main.tf (Root) - Orchestrates the deployment based on variables
 
-variable "project_name" {
-  description = "A unique prefix for all resources created."
-  type        = string
-  default     = "multi-cloud-app"
-}
-
-variable "target_cloud" {
-  description = "The target cloud platform: aws, azure, or gcp."
-  type        = string
-  default     = "aws"
-  validation {
-    condition     = contains(["aws", "azure", "gcp"], var.target_cloud)
-    error_message = "The target_cloud must be one of: aws, azure, or gcp."
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 3.0"
+    }
+    google = {
+      source  = "hashicorp/google"
+      version = "~> 5.0"
+    }
+    # Used to run local commands, e.g., for file uploads
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.0"
+    }
   }
 }
 
-variable "deployment_mode" {
-  description = "The deployment target: 'k8s' for managed clusters or 'static' for free-tier object storage."
-  type        = string
-  default     = "k8s"
-  validation {
-    condition     = contains(["k8s", "static"], var.deployment_mode)
-    error_message = "deployment_mode must be one of: k8s, static."
-  }
+# -----------------
+# AWS Provider Configuration (Uses variable defined in variables.tf)
+# -----------------
+provider "aws" {
+  region = var.aws_region
 }
 
-variable "aws_region" {
-  description = "AWS region for deployment."
-  type        = string
-  default     = "us-east-2" # Ohio
+# -----------------
+# AWS K8S Module Call (EKS)
+# -----------------
+
+module "eks" {
+  # ONLY run if target is 'aws' AND mode is 'k8s'
+  count  = var.target_cloud == "aws" && var.deployment_mode == "k8s" ? 1 : 0
+  source = "./modules/eks" 
+
+  # Variables passed to the child module (which are defined in root variables.tf)
+  project_name      = var.project_name
+  aws_region        = var.aws_region
+  cluster_version   = var.cluster_version
 }
 
-variable "cluster_version" {
-  description = "The Kubernetes version to deploy."
-  type        = string
-  default     = "1.29" # Example version
+
+# -----------------
+# AWS Static Module Call (S3)
+# -----------------
+
+module "aws_static" {
+  # ONLY run if target is 'aws' AND mode is 'static'
+  count  = var.target_cloud == "aws" && var.deployment_mode == "static" ? 1 : 0
+  source = "./modules/aws-static"
+
+  # Variables passed to the child module (which are defined in root variables.tf)
+  project_name        = var.project_name
+  aws_region          = var.aws_region
+  static_content_path = var.static_content_path
 }
 
-variable "static_content_path" {
-  description = "Local path to the folder containing the static website (index.html, etc.)."
-  type        = string
-  default     = "static-app-content"
+# -----------------
+# Placeholder Modules for Azure/GCP (These calls are currently empty)
+# -----------------
+
+module "aks" {
+  count  = var.target_cloud == "azure" && var.deployment_mode == "k8s" ? 1 : 0
+  source = "./modules/aks" 
+}
+
+module "gke" {
+  count  = var.target_cloud == "gcp" && var.deployment_mode == "k8s" ? 1 : 0
+  source = "./modules/gke" 
 }
