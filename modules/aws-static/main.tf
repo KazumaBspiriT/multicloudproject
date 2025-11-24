@@ -52,17 +52,16 @@ resource "aws_s3_bucket_policy" "public_read_policy" {
   bucket = aws_s3_bucket.website_bucket.id
   policy = data.aws_iam_policy_document.allow_public_read.json
 }
+
+# 5) Compute a stable hash of all files in the content directory
 locals {
   content_dir   = abspath(var.static_content_path)
   content_files = fileset(local.content_dir, "**")
-  content_hash  = length(local.content_files) == 0
-    ? "empty"
-    : sha256(join("", [
-        for f in local.content_files :
-        filesha256("${local.content_dir}/${f}")
-      ]))
+  # put the conditional on one line to avoid HCL parsing issues on some setups
+  content_hash  = length(local.content_files) == 0 ? "empty" : sha256(join("", [for f in local.content_files : filesha256("${local.content_dir}/${f}")]))
 }
-# 5) Upload local site files (requires awscli available where Terraform runs)
+
+# 6) Upload local site files (requires awscli on the runner/machine running terraform)
 resource "null_resource" "upload_files" {
   # skip upload entirely if the folder is empty/missing
   count = length(local.content_files) == 0 ? 0 : 1
@@ -86,7 +85,7 @@ output "bucket_name" {
 }
 
 # NOTE: S3 static website endpoint is HTTP-only.
-# If you need HTTPS, front it with CloudFront (different module).
+# If you need HTTPS, front it with CloudFront (separate module).
 output "website_endpoint" {
   value = aws_s3_bucket_website_configuration.website_config.website_endpoint
 }
