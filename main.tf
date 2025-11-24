@@ -2,6 +2,10 @@
 
 terraform {
   required_providers {
+    local = {
+        source  = "hashicorp/local"
+        version = "~> 2.5"
+    }
     aws = {
       source  = "hashicorp/aws"
       version = "~> 5.0"
@@ -25,6 +29,8 @@ terraform {
     }
   }
 }
+
+
 
 # -----------------
 # AWS Provider Configuration (Uses variable defined in variables.tf)
@@ -53,16 +59,16 @@ module "eks" {
 # AWS Static Module Call (S3)
 # -----------------
 
-module "aws_static" {
-  # ONLY run if target is 'aws' AND mode is 'static'
-  count  = var.target_cloud == "aws" && var.deployment_mode == "static" ? 1 : 0
-  source = "./modules/aws-static"
 
-  # Variables passed to the child module (which are defined in root variables.tf)
+
+module "aws_static" {
+  count               = var.target_cloud == "aws" && var.deployment_mode == "static" ? 1 : 0
+  source              = "./modules/aws-static"   # <- dash, not underscore
   project_name        = var.project_name
   aws_region          = var.aws_region
   static_content_path = var.static_content_path
 }
+
 
 # -----------------
 # Placeholder Modules for Azure/GCP (Now passing required placeholder arguments)

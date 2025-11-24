@@ -1,33 +1,32 @@
-# modules/aws-static/main.tf
-# Provisions an AWS S3 bucket configured for static website hosting, 
-# along with necessary policies and content upload mechanism.
+# Provisions an AWS S3 bucket for static website hosting and uploads content.
 
-# 1. Create S3 Bucket (Name must be globally unique)
+resource "random_string" "suffix" {
+  length  = 4
+  special = false
+  upper   = false
+  numeric = true
+}
+
+# 1) S3 bucket (needs global uniqueness)
 resource "aws_s3_bucket" "website_bucket" {
-  bucket = "${var.project_name}-${var.aws_region}-static-${random_string.suffix.result}" # Use random suffix for uniqueness
-  
+  bucket = "${var.project_name}-${var.aws_region}-static-${random_string.suffix.result}"
+
   tags = {
-    "Project" = var.project_name
-    "ManagedBy" = "Terraform"
-    "CostCenter" = "FreeTier"
+    Project    = var.project_name
+    ManagedBy  = "Terraform"
+    CostCenter = "FreeTier"
   }
 }
 
-# 2. Enable Static Website Hosting
+# 2) Static website hosting
 resource "aws_s3_bucket_website_configuration" "website_config" {
   bucket = aws_s3_bucket.website_bucket.id
 
-  index_document {
-    suffix = "index.html"
-  }
-
-  error_document {
-    key = "404.html"
-  }
+  index_document { suffix = "index.html" }
+  error_document { key    = "404.html" }
 }
 
-# 3. Block Public Access (to ensure website config works, S3 needs explicit policy)
-# We set these to false to allow public read via the bucket policy below.
+# 3) Public access settings (website endpoints require public reads if you don’t use CloudFront)
 resource "aws_s3_bucket_public_access_block" "public_access" {
   bucket                  = aws_s3_bucket.website_bucket.id
   block_public_acls       = false
@@ -36,19 +35,16 @@ resource "aws_s3_bucket_public_access_block" "public_access" {
   restrict_public_buckets = false
 }
 
-# 4. Set Bucket Policy to allow Public Read access (required for static hosting)
+# 4) Bucket policy: public read of objects
 data "aws_iam_policy_document" "allow_public_read" {
   statement {
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.website_bucket.arn}/*"]
+
     principals {
       type        = "*"
       identifiers = ["*"]
     }
-    actions = [
-      "s3:GetObject",
-    ]
-    resources = [
-      "${aws_s3_bucket.website_bucket.arn}/*", # Policy applies to all objects
-    ]
   }
 }
 
@@ -57,31 +53,31 @@ resource "aws_s3_bucket_policy" "public_read_policy" {
   policy = data.aws_iam_policy_document.allow_public_read.json
 }
 
-
-# 5. Upload website files (using AWS CLI on the GitHub Runner)
-# We use the null_resource and local-exec since Terraform does not manage file contents well
+# 5) Upload local site files (requires awscli available where Terraform runs)
 resource "null_resource" "upload_files" {
   triggers = {
-    # Hashing file content forces a re-upload on file change
-    content_hash = filesha256(join("", [for f in fileset(var.static_content_path, "**") : file("${var.static_content_path}/${f}")]))
+    content_hash = filesha256(join("", [
+      for f in fileset(var.static_content_path, "**") :
+      file("${var.static_content_path}/${f}")
+    ]))
   }
 
   provisioner "local-exec" {
-    # This command requires the 'aws' CLI to be available on the runner
     command = "aws s3 sync ${var.static_content_path} s3://${aws_s3_bucket.website_bucket.id} --delete --acl public-read"
   }
-  
-  # Ensure policy and website config are applied before uploading
+
   depends_on = [
     aws_s3_bucket_website_configuration.website_config,
     aws_s3_bucket_policy.public_read_policy
   ]
 }
 
-# Helper to ensure unique bucket name
-resource "random_string" "suffix" {
-  length  = 4
-  special = false
-  upper   = false
-  numeric = true
+output "bucket_name" {
+  value = aws_s3_bucket.website_bucket.bucket
+}
+
+# NOTE: S3 static website endpoint is HTTP-only.
+# If you need HTTPS, front it with CloudFront (different module).
+output "website_endpoint" {
+  value = aws_s3_bucket_website_configuration.website_config.website_endpoint
 }
