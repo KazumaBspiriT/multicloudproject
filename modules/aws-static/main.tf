@@ -23,7 +23,7 @@ resource "aws_s3_bucket_website_configuration" "website_config" {
   bucket = aws_s3_bucket.website_bucket.id
 
   index_document { suffix = "index.html" }
-  error_document { key    = "404.html" }
+  error_document { key = "404.html" }
 }
 
 # 3) Public access settings (website endpoints require public reads if you don’t use CloudFront)

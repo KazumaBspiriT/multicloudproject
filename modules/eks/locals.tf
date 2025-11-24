@@ -23,7 +23,7 @@ locals {
         exec = {
           apiVersion = "client.authentication.k8s.io/v1"
           command    = "aws"
-          args       = ["eks","get-token","--cluster-name", module.eks_cluster.cluster_name]
+          args       = ["eks", "get-token", "--cluster-name", module.eks_cluster.cluster_name]
         }
       }
     }]

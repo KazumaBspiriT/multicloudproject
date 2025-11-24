@@ -1,13 +1,18 @@
-# outputs.tf (Root)
-
-# This output will ONLY be populated if the 'eks' module is deployed (count > 0)
-output "kubeconfig_raw" {
-  description = "The raw kubeconfig content for connecting to the cluster."
-  value       = var.target_cloud == "aws" ? module.eks[0].kubeconfig_raw : "Not Applicable"
-  sensitive   = true # Mark as sensitive since it contains credentials
+locals {
+  eks_enabled = var.target_cloud == "aws" && var.deployment_mode == "k8s" && length(module.eks) > 0
 }
 
-output "cluster_endpoint" {
-  description = "The public endpoint URL of the Kubernetes API server."
-  value       = var.target_cloud == "aws" ? module.eks[0].cluster_endpoint : "Not Applicable"
+output "eks_cluster_name" {
+  value       = local.eks_enabled ? module.eks[0].cluster_name : null
+  description = "EKS cluster name (null when not deployed)"
+}
+
+output "eks_cluster_endpoint" {
+  value       = local.eks_enabled ? module.eks[0].cluster_endpoint : null
+  description = "EKS API endpoint (null when not deployed)"
+}
+
+output "eks_cluster_ca" {
+  value       = local.eks_enabled ? module.eks[0].cluster_ca : null
+  description = "Cluster CA (base64; null when not deployed)"
 }

@@ -3,8 +3,8 @@
 terraform {
   required_providers {
     local = {
-        source  = "hashicorp/local"
-        version = "~> 2.5"
+      source  = "hashicorp/local"
+      version = "~> 2.5"
     }
     aws = {
       source  = "hashicorp/aws"
@@ -46,12 +46,12 @@ provider "aws" {
 module "eks" {
   # ONLY run if target is 'aws' AND mode is 'k8s'
   count  = var.target_cloud == "aws" && var.deployment_mode == "k8s" ? 1 : 0
-  source = "./modules/eks" 
+  source = "./modules/eks"
 
   # Variables passed to the child module (which are defined in root variables.tf)
-  project_name      = var.project_name
-  aws_region        = var.aws_region
-  cluster_version   = var.cluster_version
+  project_name    = var.project_name
+  aws_region      = var.aws_region
+  cluster_version = var.cluster_version
 }
 
 
@@ -63,7 +63,7 @@ module "eks" {
 
 module "aws_static" {
   count               = var.target_cloud == "aws" && var.deployment_mode == "static" ? 1 : 0
-  source              = "./modules/aws-static"   # <- dash, not underscore
+  source              = "./modules/aws-static" # <- dash, not underscore
   project_name        = var.project_name
   aws_region          = var.aws_region
   static_content_path = var.static_content_path
@@ -76,20 +76,20 @@ module "aws_static" {
 
 module "aks" {
   count  = var.target_cloud == "azure" && var.deployment_mode == "k8s" ? 1 : 0
-  source = "./modules/aks" 
-  
+  source = "./modules/aks"
+
   # ARGUMENTS ADDED HERE to satisfy modules/aks/variables.tf
-  project_name      = var.project_name
-  azure_region      = var.azure_region
-  cluster_version   = var.cluster_version
+  project_name    = var.project_name
+  azure_region    = var.azure_region
+  cluster_version = var.cluster_version
 }
 
 module "gke" {
   count  = var.target_cloud == "gcp" && var.deployment_mode == "k8s" ? 1 : 0
-  source = "./modules/gke" 
-  
+  source = "./modules/gke"
+
   # ARGUMENTS ADDED HERE to satisfy modules/gke/variables.tf
-  project_name      = var.project_name
-  gcp_region        = var.gcp_region
-  cluster_version   = var.cluster_version
+  project_name    = var.project_name
+  gcp_region      = var.gcp_region
+  cluster_version = var.cluster_version
 }
