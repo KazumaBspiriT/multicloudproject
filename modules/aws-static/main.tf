@@ -52,18 +52,27 @@ resource "aws_s3_bucket_policy" "public_read_policy" {
   bucket = aws_s3_bucket.website_bucket.id
   policy = data.aws_iam_policy_document.allow_public_read.json
 }
-
+locals {
+  content_dir   = abspath(var.static_content_path)
+  content_files = fileset(local.content_dir, "**")
+  content_hash  = length(local.content_files) == 0
+    ? "empty"
+    : sha256(join("", [
+        for f in local.content_files :
+        filesha256("${local.content_dir}/${f}")
+      ]))
+}
 # 5) Upload local site files (requires awscli available where Terraform runs)
 resource "null_resource" "upload_files" {
+  # skip upload entirely if the folder is empty/missing
+  count = length(local.content_files) == 0 ? 0 : 1
+
   triggers = {
-    content_hash = filesha256(join("", [
-      for f in fileset(var.static_content_path, "**") :
-      file("${var.static_content_path}/${f}")
-    ]))
+    content_hash = local.content_hash
   }
 
   provisioner "local-exec" {
-    command = "aws s3 sync ${var.static_content_path} s3://${aws_s3_bucket.website_bucket.id} --delete --acl public-read"
+    command = "aws s3 sync ${local.content_dir} s3://${aws_s3_bucket.website_bucket.id} --delete --acl public-read"
   }
 
   depends_on = [
