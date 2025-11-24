@@ -11,111 +11,149 @@ on:
         description: 'Deployment Mode (k8s or static)'
         required: true
         default: 'k8s'
-      
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    
+
     permissions:
       id-token: write
       contents: read
-    
+
+    env:
+      AWS_REGION: us-east-2
+      TF_IN_AUTOMATION: true
+      TF_INPUT: false
+
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-      
-      # Time Tracking Start
+
       - name: Start Provisioning Timer
         id: timer_start
-        run: echo "::set-output name=start::$(date +%s)"
-      
-      ## 1. Terraform Provisioning ##
-      - name: Configure AWS Credentials (for AWS only)
+        run: echo "start=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      # AWS creds only when target_cloud == aws (OK to use keys or swap to OIDC later)
+      - name: Configure AWS Credentials (AWS only)
         if: ${{ inputs.target_cloud == 'aws' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-2
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Ensure awscli is available for S3 sync in the null_resource
+      - name: Check AWS CLI
+        if: ${{ inputs.target_cloud == 'aws' && inputs.deployment_mode == 'static' }}
+        run: |
+          if ! command -v aws >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo apt-get install -y awscli
+          fi
+          aws --version
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
-      - name: Terraform Init and Plan
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Terraform Plan
         id: plan
         run: |
-          terraform init
-          terraform plan -var="target_cloud=${{ inputs.target_cloud }}" -var="deployment_mode=${{ inputs.deployment_mode }}" -out=tfplan.out
+          terraform plan \
+            -input=false \
+            -var="target_cloud=${{ inputs.target_cloud }}" \
+            -var="deployment_mode=${{ inputs.deployment_mode }}" \
+            -out=tfplan.out
 
       - name: Terraform Apply (Provisioning)
         id: apply
-        run: terraform apply tfplan.out
+        run: terraform apply -input=false tfplan.out
 
-      # Get Outputs
-      - name: Process Outputs
+      - name: Export Terraform outputs safely
+        id: tf_outputs
+        shell: bash
         run: |
-          if [ "${{ inputs.deployment_mode }}" == "k8s" ]; then
-            KUBECONFIG_RAW=$(terraform output -raw kubeconfig_raw)
-            echo "KUBECONFIG_RAW=$KUBECONFIG_RAW" >> $GITHUB_ENV
-            echo "$KUBECONFIG_RAW" > kubeconfig.yaml
-            CLUSTER_ENDPOINT=$(terraform output -raw cluster_endpoint)
-            echo "CLUSTER_ENDPOINT=$CLUSTER_ENDPOINT" >> $GITHUB_ENV
-          fi
-          
-          if [ "${{ inputs.deployment_mode }}" == "static" ]; then
-            WEBSITE_URL=$(terraform output -raw website_url)
-            echo "WEBSITE_URL=$WEBSITE_URL" >> $GITHUB_ENV
+          set -euo pipefail
+          CLOUD="${{ inputs.target_cloud }}"
+          MODE="${{ inputs.deployment_mode }}"
+
+          # Get all outputs as JSON; if none, keep it empty JSON
+          OUT_JSON="$(terraform output -json || echo '{}')"
+
+          # Helper to read a key if present
+          jget() { echo "$OUT_JSON" | jq -r "$1 // empty"; }
+
+          # AWS + k8s: guarded EKS outputs (must match your root output names)
+          if [ "$CLOUD" = "aws" ] && [ "$MODE" = "k8s" ]; then
+            CLUSTER_ENDPOINT="$(jget '.eks_cluster_endpoint.value')"
+            if [ -n "$CLUSTER_ENDPOINT" ]; then
+              echo "CLUSTER_ENDPOINT=$CLUSTER_ENDPOINT" >> "$GITHUB_ENV"
+              echo "cluster_endpoint=$CLUSTER_ENDPOINT" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
-      # --- Measure Provisioning Time ---
+          # Static mode (any cloud) — but you currently only implement AWS S3
+          if [ "$MODE" = "static" ]; then
+            WEBSITE_URL="$(jget '.website_endpoint.value')"
+            if [ -n "$WEBSITE_URL" ]; then
+              echo "WEBSITE_URL=$WEBSITE_URL" >> "$GITHUB_ENV"
+              echo "website_url=$WEBSITE_URL" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
       - name: Measure Provisioning Time
         id: time_provisioning
         run: |
           end=$(date +%s)
           start=${{ steps.timer_start.outputs.start }}
-          echo "::set-output name=duration::$((end - start))"
+          echo "duration=$((end - start))" >> "$GITHUB_OUTPUT"
           echo "Provisioning Time: $((end - start)) seconds"
-          
-      ## 2. Ansible Configuration (K8s Mode Only) ##
+
+      # ---- Ansible only for k8s mode (if you actually have these files) ----
       - name: Setup Python and Ansible
         if: ${{ inputs.deployment_mode == 'k8s' }}
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
-          
-      - name: Install Ansible and Kubernetes requirements
+
+      - name: Install Ansible + k8s deps
         if: ${{ inputs.deployment_mode == 'k8s' }}
         run: |
-          pip install ansible kubernetes openshift jmespath helm
+          pip install ansible kubernetes openshift jmespath
           ansible-galaxy collection install kubernetes.core community.general
 
-      - name: Run Ansible Configuration and Deployment
+      - name: Run Ansible (K8s Mode)
         if: ${{ inputs.deployment_mode == 'k8s' }}
-        id: configure
         env:
           KUBECONFIG: kubeconfig.yaml
         run: |
+          if [ ! -f ansible/inventory.yml ] || [ ! -f ansible/playbook.yml ]; then
+            echo "Ansible files not present, skipping."
+            exit 0
+          fi
           ansible-playbook -i ansible/inventory.yml ansible/playbook.yml \
             --extra-vars "deployment_mode=${{ inputs.deployment_mode }}"
-      
-      ## 3. Smoke Test (Using native CURL) ##
-      - name: Run Smoke Test (K8s Service Check)
-        if: ${{ inputs.deployment_mode == 'k8s' }}
+
+      # Simple smoke log (you can curl a URL here if you output one for k8s)
+      - name: Smoke Log
         run: |
-          echo "Cluster API Endpoint: ${{ env.CLUSTER_ENDPOINT }}"
-          echo "Smoke test deferred due to long LoadBalancer provisioning time."
-          
-      - name: Run Smoke Test (K8s Service Check)
-        if: ${{ inputs.deployment_mode == 'k8s' }}
-        run: |
-          echo "Cluster API Endpoint: ${{ env.CLUSTER_ENDPOINT }}"
-          echo "Smoke test deferred due to long LoadBalancer provisioning time."
-          
-      ## 4. Cleanup ##
+          echo "Cloud: ${{ inputs.target_cloud }}"
+          echo "Mode:  ${{ inputs.deployment_mode }}"
+          if [ -n "${{ env.WEBSITE_URL }}" ]; then
+            echo "Static site endpoint: ${{ env.WEBSITE_URL }}"
+          fi
+          if [ -n "${{ env.CLUSTER_ENDPOINT }}" ]; then
+            echo "EKS API endpoint: ${{ env.CLUSTER_ENDPOINT }}"
+          fi
+
+      # Optional: destroy on success/failure. Keep if this is a demo pipeline.
       - name: Terraform Destroy
         if: always()
         run: |
-          terraform destroy -auto-approve -var="target_cloud=${{ inputs.target_cloud }}" -var="deployment_mode=${{ inputs.deployment_mode }}"
+          terraform destroy -auto-approve \
+            -var="target_cloud=${{ inputs.target_cloud }}" \
+            -var="deployment_mode=${{ inputs.deployment_mode }}"
 
       - name: Publish Metrics
         run: |
