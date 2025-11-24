@@ -1,15 +1,15 @@
 # modules/aws-static/main.tf
-
-variable "project_name" { type = string }
-variable "aws_region" { type = string }
-variable "static_content_path" { type = string }
+# Provisions an AWS S3 bucket configured for static website hosting, 
+# along with necessary policies and content upload mechanism.
 
 # 1. Create S3 Bucket (Name must be globally unique)
 resource "aws_s3_bucket" "website_bucket" {
-  bucket = "${var.project_name}-${var.aws_region}-static" # Using project name + region for uniqueness
+  bucket = "${var.project_name}-${var.aws_region}-static-${random_string.suffix.result}" # Use random suffix for uniqueness
   
   tags = {
-    Name = "${var.project_name}-static-website"
+    "Project" = var.project_name
+    "ManagedBy" = "Terraform"
+    "CostCenter" = "FreeTier"
   }
 }
 
@@ -26,8 +26,8 @@ resource "aws_s3_bucket_website_configuration" "website_config" {
   }
 }
 
-# 3. Block Public Access (to ensure website config works, S3 blocks all public access by default)
-# Note: For static hosting, we must allow public read access via policy.
+# 3. Block Public Access (to ensure website config works, S3 needs explicit policy)
+# We set these to false to allow public read via the bucket policy below.
 resource "aws_s3_bucket_public_access_block" "public_access" {
   bucket                  = aws_s3_bucket.website_bucket.id
   block_public_acls       = false
@@ -36,7 +36,7 @@ resource "aws_s3_bucket_public_access_block" "public_access" {
   restrict_public_buckets = false
 }
 
-# 4. Set Bucket Policy to allow Public Read access
+# 4. Set Bucket Policy to allow Public Read access (required for static hosting)
 data "aws_iam_policy_document" "allow_public_read" {
   statement {
     principals {
@@ -58,16 +58,17 @@ resource "aws_s3_bucket_policy" "public_read_policy" {
 }
 
 
-# 5. Upload website files (Assumes content is in the defined path)
+# 5. Upload website files (using AWS CLI on the GitHub Runner)
+# We use the null_resource and local-exec since Terraform does not manage file contents well
 resource "null_resource" "upload_files" {
   triggers = {
-    # Re-run the upload if content files change
+    # Hashing file content forces a re-upload on file change
     content_hash = filesha256(join("", [for f in fileset(var.static_content_path, "**") : file("${var.static_content_path}/${f}")]))
   }
 
   provisioner "local-exec" {
-    command = "aws s3 sync ${var.static_content_path} s3://${aws_s3_bucket.website_bucket.id} --delete"
-    # Requires AWS CLI to be installed and configured
+    # This command requires the 'aws' CLI to be available on the runner
+    command = "aws s3 sync ${var.static_content_path} s3://${aws_s3_bucket.website_bucket.id} --delete --acl public-read"
   }
   
   # Ensure policy and website config are applied before uploading
@@ -77,8 +78,10 @@ resource "null_resource" "upload_files" {
   ]
 }
 
-# Outputs (same format as K8s output)
-output "website_url" {
-  description = "The public endpoint of the static website."
-  value       = aws_s3_bucket_website_configuration.website_config.website_endpoint
+# Helper to ensure unique bucket name
+resource "random_string" "suffix" {
+  length  = 4
+  special = false
+  upper   = false
+  numeric = true
 }
