@@ -1,4 +1,4 @@
-# Provisions an AWS S3 bucket for static website hosting and uploads content.
+# Private S3 + CloudFront (OAC). HTTPS CDN URL, account-level Block Public Access can stay ON.
 
 resource "random_string" "suffix" {
   length  = 4
@@ -7,8 +7,8 @@ resource "random_string" "suffix" {
   numeric = true
 }
 
-# 1) S3 bucket (needs global uniqueness)
-resource "aws_s3_bucket" "website_bucket" {
+# 1) Private S3 bucket
+resource "aws_s3_bucket" "site" {
   bucket = "${var.project_name}-${var.aws_region}-static-${random_string.suffix.result}"
 
   tags = {
@@ -18,41 +18,82 @@ resource "aws_s3_bucket" "website_bucket" {
   }
 }
 
-# 2) Static website hosting
-resource "aws_s3_bucket_website_configuration" "website_config" {
-  bucket = aws_s3_bucket.website_bucket.id
-
-  index_document { suffix = "index.html" }
-  error_document { key    = "404.html" }
+resource "aws_s3_bucket_ownership_controls" "own" {
+  bucket = aws_s3_bucket.site.id
+  rule { object_ownership = "BucketOwnerPreferred" }
 }
 
-# 3) Public access settings (website endpoints require public reads if you don’t use CloudFront)
-resource "aws_s3_bucket_public_access_block" "public_access" {
-  bucket                  = aws_s3_bucket.website_bucket.id
-  block_public_acls       = false
-  block_public_policy     = false
-  ignore_public_acls      = false
-  restrict_public_buckets = false
+resource "aws_s3_bucket_public_access_block" "bpa" {
+  bucket                  = aws_s3_bucket.site.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
 }
 
-# 4) Bucket policy: public read of objects (policy-only, no ACLs on objects)
-data "aws_iam_policy_document" "allow_public_read" {
+# 2) CloudFront OAC
+resource "aws_cloudfront_origin_access_control" "oac" {
+  name                              = "${var.project_name}-oac"
+  description                       = "OAC for private S3 origin"
+  origin_access_control_origin_type = "s3"
+  signing_behavior                  = "always"
+  signing_protocol                  = "sigv4"
+}
+
+# 3) CloudFront distribution (serves index.html)
+resource "aws_cloudfront_distribution" "cdn" {
+  enabled             = true
+  price_class         = "PriceClass_100"
+  default_root_object = "index.html"
+
+  origin {
+    domain_name              = aws_s3_bucket.site.bucket_regional_domain_name
+    origin_id                = "s3-origin"
+    origin_access_control_id = aws_cloudfront_origin_access_control.oac.id
+  }
+
+  default_cache_behavior {
+    target_origin_id       = "s3-origin"
+    viewer_protocol_policy = "redirect-to-https"
+    allowed_methods        = ["GET", "HEAD"]
+    cached_methods         = ["GET", "HEAD"]
+
+    forwarded_values {
+      query_string = false
+      cookies { forward = "none" }
+    }
+  }
+
+  restrictions { geo_restriction { restriction_type = "none" } }
+
+  viewer_certificate {
+    cloudfront_default_certificate = true
+  }
+
+  depends_on = [aws_s3_bucket_public_access_block.bpa]
+}
+
+# 4) Bucket policy: allow ONLY this CloudFront distribution to read objects (not public!)
+data "aws_iam_policy_document" "cf_read" {
   statement {
+    sid = "AllowCloudFrontRead"
+    principals { type = "Service", identifiers = ["cloudfront.amazonaws.com"] }
     actions   = ["s3:GetObject"]
-    resources = ["${aws_s3_bucket.website_bucket.arn}/*"]
-    principals {
-      type        = "*"
-      identifiers = ["*"]
+    resources = ["${aws_s3_bucket.site.arn}/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "AWS:SourceArn"
+      values   = [aws_cloudfront_distribution.cdn.arn]
     }
   }
 }
 
-resource "aws_s3_bucket_policy" "public_read_policy" {
-  bucket = aws_s3_bucket.website_bucket.id
-  policy = data.aws_iam_policy_document.allow_public_read.json
+resource "aws_s3_bucket_policy" "site" {
+  bucket = aws_s3_bucket.site.id
+  policy = data.aws_iam_policy_document.cf_read.json
 }
 
-# 5) Compute a stable hash of all files in the content directory
+# 5) Upload local site files (needs awscli on the runner/machine)
 locals {
   content_dir   = abspath(var.static_content_path)
   content_files = fileset(local.content_dir, "**")
@@ -61,32 +102,21 @@ locals {
   ]))
 }
 
-# 6) Upload local site files (requires awscli on the runner/machine running terraform)
-resource "null_resource" "upload_files" {
-  # skip upload entirely if the folder is empty/missing
+resource "null_resource" "upload" {
   count = length(local.content_files) == 0 ? 0 : 1
 
-  triggers = {
-    content_hash = local.content_hash
-  }
+  triggers = { content_hash = local.content_hash }
 
   provisioner "local-exec" {
-    # removed "--acl public-read" because the bucket is policy-only (ACLs disabled)
-    command = "aws s3 sync ${local.content_dir} s3://${aws_s3_bucket.website_bucket.id} --delete"
+    command = "aws s3 sync ${local.content_dir} s3://${aws_s3_bucket.site.id} --delete"
   }
 
   depends_on = [
-    aws_s3_bucket_website_configuration.website_config,
-    aws_s3_bucket_policy.public_read_policy
+    aws_s3_bucket_ownership_controls.own,
+    aws_s3_bucket_public_access_block.bpa,
+    aws_s3_bucket_policy.site,
   ]
 }
 
-output "bucket_name" {
-  value = aws_s3_bucket.website_bucket.bucket
-}
-
-# NOTE: S3 static website endpoint is HTTP-only.
-# If you need HTTPS, front it with CloudFront (separate module).
-output "website_endpoint" {
-  value = aws_s3_bucket_website_configuration.website_config.website_endpoint
-}
+output "bucket_name"   { value = aws_s3_bucket.site.bucket }
+output "cloudfront_url" { value = "https://${aws_cloudfront_distribution.cdn.domain_name}" }
