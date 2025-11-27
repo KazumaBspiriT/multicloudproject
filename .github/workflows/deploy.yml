@@ -151,13 +151,13 @@ jobs:
             echo "EKS API endpoint: ${{ env.CLUSTER_ENDPOINT }}"
           fi
 
-      # Optional: destroy on success/failure. Keep if this is a demo pipeline.
-      # - name: Terraform Destroy
-      #   if: always()
-      #   run: |
-      #     terraform destroy -auto-approve \
-      #       -var="target_cloud=${{ inputs.target_cloud }}" \
-      #       -var="deployment_mode=${{ inputs.deployment_mode }}"
+      # Destroy resources ONLY if the pipeline fails (failure() returns true)
+      - name: Terraform Destroy (on failure)
+        if: failure()
+        run: |
+          terraform destroy -auto-approve \
+            -var="target_cloud=${{ inputs.target_cloud }}" \
+            -var="deployment_mode=${{ inputs.deployment_mode }}"
 
       - name: Publish Metrics
         run: |

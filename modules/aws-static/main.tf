@@ -83,7 +83,37 @@ resource "aws_cloudfront_distribution" "cdn" {
   depends_on = [aws_s3_bucket_public_access_block.bpa]
 }
 
+# 5) Upload local site files (needs awscli on the runner/machine)
+# MOVED UP: Ensure upload (which creates folders/objects) doesn't race with policy
+locals {
+
+  content_dir   = abspath(var.static_content_path)
+  content_files = fileset(local.content_dir, "**")
+  content_hash  = length(local.content_files) == 0 ? "empty" : sha256(join("", [
+    for f in local.content_files : filesha256("${local.content_dir}/${f}")
+  ]))
+}
+
+resource "null_resource" "upload" {
+  count = length(local.content_files) == 0 ? 0 : 1
+
+  triggers = {
+    content_hash = local.content_hash
+  }
+
+  provisioner "local-exec" {
+    command = "aws s3 sync ${local.content_dir} s3://${aws_s3_bucket.site.id} --delete"
+  }
+
+  depends_on = [
+    aws_s3_bucket_ownership_controls.own,
+    aws_s3_bucket_public_access_block.bpa,
+    # Removed policy dependency to fix race condition
+  ]
+}
+
 # 4) Bucket policy: allow ONLY this CloudFront distribution to read (not public!)
+# MOVED DOWN: Policy applied after potential bucket creation stabilization
 data "aws_iam_policy_document" "cf_read" {
   statement {
     sid     = "AllowCloudFrontRead"
@@ -108,34 +138,9 @@ data "aws_iam_policy_document" "cf_read" {
 resource "aws_s3_bucket_policy" "site" {
   bucket = aws_s3_bucket.site.id
   policy = data.aws_iam_policy_document.cf_read.json
+  depends_on = [aws_s3_bucket_public_access_block.bpa] # Ensure public access block is set first
 }
 
-# 5) Upload local site files (needs awscli on the runner/machine)
-locals {
-  content_dir   = abspath(var.static_content_path)
-  content_files = fileset(local.content_dir, "**")
-  content_hash  = length(local.content_files) == 0 ? "empty" : sha256(join("", [
-    for f in local.content_files : filesha256("${local.content_dir}/${f}")
-  ]))
-}
-
-resource "null_resource" "upload" {
-  count = length(local.content_files) == 0 ? 0 : 1
-
-  triggers = {
-    content_hash = local.content_hash
-  }
-
-  provisioner "local-exec" {
-    command = "aws s3 sync ${local.content_dir} s3://${aws_s3_bucket.site.id} --delete"
-  }
-
-  depends_on = [
-    aws_s3_bucket_ownership_controls.own,
-    aws_s3_bucket_public_access_block.bpa,
-    aws_s3_bucket_policy.site
-  ]
-}
 
 # Outputs
 output "bucket_name" {
