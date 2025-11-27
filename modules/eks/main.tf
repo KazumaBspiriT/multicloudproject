@@ -41,6 +41,9 @@ module "eks_cluster" {
 
   # Necessary for passing credentials to the cluster later on (kubectl auth)
   enable_cluster_creator_admin_permissions = true
+  
+  # Ensure robust access using modern EKS API access entries
+  authentication_mode = "API_AND_CONFIG_MAP"
 
   # Set tags for cost tracking
   tags = {
