@@ -9,7 +9,7 @@
     state: present
     # values: # Add custom values if needed, e.g., to configure AWS ELB type
   register: ingress_install
-  [cite_start]retries: 5 # Use retries for transient API hiccups [cite: 97]
+  retries: 5 # Use retries for transient API hiccups
   delay: 10
   until: ingress_install is not failed
 
@@ -23,4 +23,4 @@
   until: ingress_service.resources[0].status.loadBalancer.ingress is defined
   retries: 30
   delay: 10
-  # Note: Provisioning the AWS Load Balancer can take the longest [cite: 110, 113]
+  # Note: Provisioning the AWS Load Balancer can take the longest
