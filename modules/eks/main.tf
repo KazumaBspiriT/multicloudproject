@@ -74,6 +74,6 @@ module "eks_cluster" {
 
 # Since Ansible runs locally, we use a local file to store the Kubeconfig temporarily
 resource "local_file" "kubeconfig" {
-  filename = "${path.module}/kubeconfig_${module.eks_cluster.cluster_name}.yaml"
+  filename = "${path.root}/kubeconfig.yaml"
   content  = local.kubeconfig
 }
