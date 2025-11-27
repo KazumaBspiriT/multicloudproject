@@ -136,6 +136,18 @@ jobs:
           pip install ansible kubernetes openshift jmespath
           ansible-galaxy collection install kubernetes.core community.general
 
+      - name: Debug - List Files
+        if: ${{ inputs.deployment_mode == 'k8s' }}
+        run: |
+          echo "Listing root directory:"
+          ls -la
+          if [ -f kubeconfig.yaml ]; then
+            echo "kubeconfig.yaml found!"
+            head -n 5 kubeconfig.yaml
+          else
+            echo "kubeconfig.yaml NOT found!"
+          fi
+
       - name: Run Ansible (K8s Mode)
         if: ${{ inputs.deployment_mode == 'k8s' }}
         env:
