@@ -5,6 +5,10 @@ resource "aws_apprunner_service" "app" {
     image_repository {
       image_identifier      = var.app_image
       image_repository_type = "ECR_PUBLIC" # Starts simple with public images
+      
+      image_configuration {
+        port = "80"
+      }
     }
     auto_deployments_enabled = false
   }
