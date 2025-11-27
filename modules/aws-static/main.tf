@@ -37,7 +37,7 @@ resource "aws_s3_bucket_public_access_block" "bpa" {
 
 # 2) CloudFront OAC (so CloudFront can read the private S3 origin)
 resource "aws_cloudfront_origin_access_control" "oac" {
-  name                              = "${var.project_name}-oac"
+  name                              = "${var.project_name}-oac-${random_string.suffix.result}"
   description                       = "OAC for private S3 origin"
   origin_access_control_origin_type = "s3"
   signing_behavior                  = "always"
