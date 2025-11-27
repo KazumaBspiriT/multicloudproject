@@ -48,35 +48,21 @@ module "eks_cluster" {
   # Ensure robust access using modern EKS API access entries
   authentication_mode = "API_AND_CONFIG_MAP"
 
-  # Generic: Grant Admin access to current caller + any provided additional ARNs
-  access_entries = merge(
-    {
-      current_caller = {
-        principal_arn = data.aws_caller_identity.current.arn
-        policy_associations = {
-          admin = {
-            policy_arn = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
-            access_scope = {
-              type = "cluster"
-            }
-          }
-        }
-      }
-    },
-    {
-      for arn in var.additional_admin_arns : arn => {
-        principal_arn = arn
-        policy_associations = {
-          admin = {
-            policy_arn = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
-            access_scope = {
-              type = "cluster"
-            }
+  # Generic: Grant Admin access to any provided additional ARNs
+  # Note: current caller is already handled by enable_cluster_creator_admin_permissions = true
+  access_entries = {
+    for arn in var.additional_admin_arns : arn => {
+      principal_arn = arn
+      policy_associations = {
+        admin = {
+          policy_arn = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+          access_scope = {
+            type = "cluster"
           }
         }
       }
     }
-  )
+  }
 
   # Set tags for cost tracking
   tags = {
