@@ -16,3 +16,13 @@ output "eks_cluster_ca" {
   value       = local.eks_enabled ? module.eks[0].cluster_ca : null
   description = "Cluster CA (base64; null when not deployed)"
 }
+
+output "website_endpoint" {
+  value       = var.deployment_mode == "static" && var.target_cloud == "aws" ? module.aws_static[0].cloudfront_url : null
+  description = "The CloudFront distribution URL"
+}
+
+output "website_bucket" {
+  value       = var.deployment_mode == "static" && var.target_cloud == "aws" ? module.aws_static[0].bucket_name : null
+  description = "The S3 bucket name"
+}

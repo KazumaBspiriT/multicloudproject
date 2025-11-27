@@ -148,12 +148,12 @@ jobs:
           fi
 
       # Optional: destroy on success/failure. Keep if this is a demo pipeline.
-      - name: Terraform Destroy
-        if: always()
-        run: |
-          terraform destroy -auto-approve \
-            -var="target_cloud=${{ inputs.target_cloud }}" \
-            -var="deployment_mode=${{ inputs.deployment_mode }}"
+      # - name: Terraform Destroy
+      #   if: always()
+      #   run: |
+      #     terraform destroy -auto-approve \
+      #       -var="target_cloud=${{ inputs.target_cloud }}" \
+      #       -var="deployment_mode=${{ inputs.deployment_mode }}"
 
       - name: Publish Metrics
         run: |
