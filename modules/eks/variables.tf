@@ -23,3 +23,9 @@ variable "node_desired_size" {
   type        = number
   default     = 2
 }
+
+variable "additional_admin_arns" {
+  description = "List of IAM ARNs (Users or Roles) to explicitly grant admin access to the cluster"
+  type        = list(string)
+  default     = []
+}
