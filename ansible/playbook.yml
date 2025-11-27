@@ -11,5 +11,5 @@
         msg: "Starting cluster configuration for deployment mode: {{ deployment_mode }}"
 
   roles:
-    - k8s_addons
+    - k8_addons
     - sample_app
