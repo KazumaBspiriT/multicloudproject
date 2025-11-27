@@ -10,7 +10,8 @@ resource "random_string" "suffix" {
 
 # 1) Private S3 bucket
 resource "aws_s3_bucket" "site" {
-  bucket = "${var.project_name}-${var.aws_region}-static-${random_string.suffix.result}"
+  bucket        = "${var.project_name}-${var.aws_region}-static-${random_string.suffix.result}"
+  force_destroy = true
 
   tags = {
     Project    = var.project_name
