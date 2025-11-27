@@ -34,26 +34,20 @@
               ports:
               - container_port: 80
 
-- name: Expose application via Ingress
+- name: Expose application via LoadBalancer Service
   kubernetes.core.k8s:
     state: present
     definition:
-      apiVersion: networking.k8s.io/v1
-      kind: Ingress
+      apiVersion: v1
+      kind: Service
       metadata:
-        name: portfolio-ingress
+        name: portfolio-service
         namespace: sample-app
-        annotations:
-          # Optional: Use AWS-specific annotation for Load Balancer scheme if needed
-          # kubernetes.io/ingress.class: "nginx" # Specify the ingress class
       spec:
-        rules:
-        - http:
-            paths:
-            - path: /
-              pathType: Prefix
-              backend:
-                service:
-                  name: portfolio-service
-                  port:
-                    number: 80
+        type: LoadBalancer
+        selector:
+          app: portfolio
+        ports:
+        - protocol: TCP
+          port: 80
+          targetPort: 80
