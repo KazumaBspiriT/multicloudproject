@@ -26,3 +26,8 @@ output "website_bucket" {
   value       = var.deployment_mode == "static" && var.target_cloud == "aws" ? module.aws_static[0].bucket_name : null
   description = "The S3 bucket name"
 }
+
+output "container_url" {
+  value       = var.deployment_mode == "container" && var.target_cloud == "aws" ? module.aws_container[0].service_url : null
+  description = "The URL of the App Runner service (Container Mode)"
+}

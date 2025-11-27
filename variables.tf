@@ -17,13 +17,19 @@ variable "target_cloud" {
 }
 
 variable "deployment_mode" {
-  description = "The deployment target: 'k8s' for managed clusters or 'static' for free-tier object storage."
+  description = "The deployment target: 'k8s' for managed clusters, 'container' for App Runner, or 'static' for free-tier object storage."
   type        = string
   default     = "k8s"
   validation {
-    condition     = contains(["k8s", "static"], var.deployment_mode)
-    error_message = "deployment_mode must be one of: k8s, static."
+    condition     = contains(["k8s", "static", "container"], var.deployment_mode)
+    error_message = "deployment_mode must be one of: k8s, static, container."
   }
+}
+
+variable "app_image" {
+  description = "Container image to deploy (used for 'container' or 'k8s' mode)"
+  type        = string
+  default     = "public.ecr.aws/nginx/nginx:latest"
 }
 
 variable "aws_region" {

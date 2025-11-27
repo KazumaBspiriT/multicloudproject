@@ -55,6 +55,14 @@ module "eks" {
   additional_admin_arns = var.additional_admin_arns
 }
 
+module "aws_container" {
+  count        = var.target_cloud == "aws" && var.deployment_mode == "container" ? 1 : 0
+  source       = "./modules/aws-container"
+  project_name = var.project_name
+  aws_region   = var.aws_region
+  app_image    = var.app_image
+}
+
 
 # -----------------
 # AWS Static Module Call (S3)
