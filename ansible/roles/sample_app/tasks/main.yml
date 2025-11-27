@@ -30,7 +30,7 @@
           spec:
             containers:
             - name: simple-web
-              image: nginx:latest # Replace with your actual portfolio container image
+              image: "{{ app_image | default('nginx:latest') }}" # Use variable with default
               ports:
               - container_port: 80
 

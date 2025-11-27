@@ -11,6 +11,10 @@ on:
         description: 'Deployment Mode (k8s or static)'
         required: true
         default: 'k8s'
+      app_image:
+        description: 'Container Image to deploy (e.g., nginx:latest)'
+        required: false
+        default: 'nginx:latest'
 
 jobs:
   deploy:
@@ -133,7 +137,7 @@ jobs:
             exit 0
           fi
           ansible-playbook -i ansible/inventory.yml ansible/playbook.yml \
-            --extra-vars "deployment_mode=${{ inputs.deployment_mode }}"
+            --extra-vars "deployment_mode=${{ inputs.deployment_mode }} app_image=${{ inputs.app_image }}"
 
       # Simple smoke log (you can curl a URL here if you output one for k8s)
       - name: Smoke Log
