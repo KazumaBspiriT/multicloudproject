@@ -31,7 +31,7 @@ module "eks_cluster" {
   # EKS Managed Node Group (using cost-effective instance type for portfolios)
   eks_managed_node_groups = {
     default = {
-      name           = "${var.project_name}-workers"
+      name           = "workers" # Shortened to avoid IAM role name length limit (38 chars)
       instance_types = [var.node_instance_type]
       min_size       = 1
       max_size       = 3
