@@ -49,9 +49,10 @@ module "eks" {
   source = "./modules/eks"
 
   # Variables passed to the child module (which are defined in root variables.tf)
-  project_name    = var.project_name
-  aws_region      = var.aws_region
-  cluster_version = var.cluster_version
+  project_name          = var.project_name
+  aws_region            = var.aws_region
+  cluster_version       = var.cluster_version
+  additional_admin_arns = var.additional_admin_arns
 }
 
 

@@ -56,3 +56,9 @@ variable "gcp_region" {
   type        = string
   default     = "us-central1"
 }
+
+variable "additional_admin_arns" {
+  description = "List of IAM ARNs (Users or Roles) to grant admin access to the cluster."
+  type        = list(string)
+  default     = []
+}
