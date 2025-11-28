@@ -11,5 +11,5 @@
         msg: "Starting cluster configuration for deployment mode: {{ deployment_mode }}"
 
   roles:
-    - k8_addons
+    # - k8_addons # Skipped for simplicity (using LoadBalancer service instead)
     - sample_app
