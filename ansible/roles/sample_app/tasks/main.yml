@@ -2,6 +2,7 @@
 
 - name: Create application namespace
   kubernetes.core.k8s:
+    kubeconfig: "{{ playbook_dir }}/../kubeconfig.yaml"
     name: sample-app
     api_version: v1
     kind: Namespace
@@ -9,6 +10,7 @@
 
 - name: Deploy sample application (Deployment and Service)
   kubernetes.core.k8s:
+    kubeconfig: "{{ playbook_dir }}/../kubeconfig.yaml"
     state: present
     definition:
       apiVersion: apps/v1
@@ -36,6 +38,7 @@
 
 - name: Expose application via LoadBalancer Service
   kubernetes.core.k8s:
+    kubeconfig: "{{ playbook_dir }}/../kubeconfig.yaml"
     state: present
     definition:
       apiVersion: v1

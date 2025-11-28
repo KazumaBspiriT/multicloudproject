@@ -2,6 +2,7 @@
 
 - name: Install NGINX Ingress Controller using Helm
   kubernetes.core.helm:
+    kubeconfig: "{{ playbook_dir }}/../kubeconfig.yaml" # Explicitly point to the file in root
     name: ingress-nginx
     chart_ref: ingress-nginx/ingress-nginx
     release_namespace: ingress-nginx
@@ -15,6 +16,7 @@
 
 - name: Wait for NGINX Ingress Controller LoadBalancer to provision (AWS)
   kubernetes.core.k8s_info:
+    kubeconfig: "{{ playbook_dir }}/../kubeconfig.yaml"
     api_version: v1
     kind: Service
     name: ingress-nginx-controller
