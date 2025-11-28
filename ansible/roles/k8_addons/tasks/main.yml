@@ -1,5 +1,10 @@
 # ansible/roles/k8s_addons/tasks/main.yml
 
+- name: Add ingress-nginx Helm repository
+  kubernetes.core.helm_repository:
+    name: ingress-nginx
+    repo_url: https://kubernetes.github.io/ingress-nginx
+
 - name: Install NGINX Ingress Controller using Helm
   kubernetes.core.helm:
     kubeconfig: "{{ playbook_dir }}/../kubeconfig.yaml" # Explicitly point to the file in root
