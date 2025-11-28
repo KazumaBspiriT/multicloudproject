@@ -23,7 +23,7 @@
       spec:
         replicas: 2
         selector:
-          match_labels:
+          matchLabels:
             app: portfolio
         template:
           metadata:
@@ -32,9 +32,9 @@
           spec:
             containers:
             - name: simple-web
-              image: "{{ app_image | default('nginx:latest') }}" # Use variable with default
+              image: "{{ app_image | default('nginx:latest') }}"
               ports:
-              - container_port: 80
+              - containerPort: 80
 
 - name: Expose application via LoadBalancer Service
   kubernetes.core.k8s:
