@@ -28,6 +28,9 @@ terraform {
       version = "~> 3.0"
     }
   }
+
+  # Backend configuration (filled dynamically by deploy.sh or pipeline)
+  backend "s3" {}
 }
 
 
