@@ -28,12 +28,12 @@ module "eks_cluster" {
 
   cluster_name    = "${var.project_name}-eks-cluster"
   cluster_version = var.cluster_version
-  
+
   # Ensure public access so GitHub Actions runner can reach the API server
   cluster_endpoint_public_access = true
-  
-  vpc_id          = module.vpc.vpc_id
-  subnet_ids      = module.vpc.private_subnets
+
+  vpc_id     = module.vpc.vpc_id
+  subnet_ids = module.vpc.private_subnets
 
   # EKS Managed Node Group (using cost-effective instance type for portfolios)
   eks_managed_node_groups = {
@@ -48,7 +48,7 @@ module "eks_cluster" {
 
   # Necessary for passing credentials to the cluster later on (kubectl auth)
   enable_cluster_creator_admin_permissions = true
-  
+
   # Ensure robust access using modern EKS API access entries
   authentication_mode = "API_AND_CONFIG_MAP"
 

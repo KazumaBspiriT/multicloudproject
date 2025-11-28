@@ -13,8 +13,18 @@ echo -e "${BLUE}--- Multi-Cloud Deployment Trigger ---${NC}"
 read -p "Select Action (deploy/destroy) [default: deploy]: " ACTION
 ACTION=${ACTION:-deploy}
 
-read -p "Select Target Cloud (aws/azure/gcp) [default: aws]: " CLOUD
-CLOUD=${CLOUD:-aws}
+echo "Enter Target Clouds (comma-separated, e.g. aws,gcp) [default: aws]: "
+read -p "> " CLOUDS_INPUT
+CLOUDS_INPUT=${CLOUDS_INPUT:-aws}
+
+# Convert comma-separated string to JSON array string for Terraform
+# e.g. "aws,gcp" -> '["aws","gcp"]'
+IFS=',' read -ra ADDR <<< "$CLOUDS_INPUT"
+TF_CLOUDS_LIST="["
+for i in "${ADDR[@]}"; do
+  TF_CLOUDS_LIST+="\"$i\","
+done
+TF_CLOUDS_LIST="${TF_CLOUDS_LIST%,}]"
 
 read -p "Select Deployment Mode (k8s/static/container) [default: k8s]: " MODE
 MODE=${MODE:-k8s}
@@ -26,6 +36,16 @@ if [[ "$MODE" == "k8s" || "$MODE" == "container" ]]; then
 fi
 
 # 2. Backend Bootstrap
+# Check for GCP Project ID if needed (if 'gcp' is in the list)
+if [[ "$CLOUDS_INPUT" == *"gcp"* ]]; then
+  PROJECT_ID=$(gcloud config get-value project 2>/dev/null)
+  if [[ -z "$PROJECT_ID" ]]; then
+     echo -e "${RED}Error: No GCP Project ID found. Run 'gcloud config set project YOUR_PROJECT_ID'${NC}"
+     exit 1
+  fi
+  echo "Using GCP Project: $PROJECT_ID"
+fi
+
 REGION="us-east-2"
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 BUCKET_NAME="multicloud-tf-state-${ACCOUNT_ID}"
@@ -65,19 +85,28 @@ terraform init \
 
 if [ "$ACTION" == "destroy" ]; then
   echo -e "\n${RED}DESTROYING Infrastructure...${NC}"
-  terraform destroy -auto-approve \
-    -var="target_cloud=$CLOUD" \
-    -var="deployment_mode=$MODE" \
-    -var="app_image=$IMAGE"
+  
+  # Construct TF_VAR arguments
+  # Note: We pass the list as a string
+  TF_CMD_ARGS="-var=target_clouds=$TF_CLOUDS_LIST -var=deployment_mode=$MODE -var=app_image=$IMAGE"
+  if [[ "$CLOUDS_INPUT" == *"gcp"* ]]; then
+    TF_CMD_ARGS="$TF_CMD_ARGS -var=gcp_project_id=$PROJECT_ID"
+  fi
+
+  terraform destroy -auto-approve $TF_CMD_ARGS
+
   echo -e "\n${GREEN}Destroy Complete!${NC}"
   exit 0
 fi
 
 echo -e "\n${BLUE}[2/3] Applying Infrastructure...${NC}"
-terraform apply -auto-approve \
-  -var="target_cloud=$CLOUD" \
-  -var="deployment_mode=$MODE" \
-  -var="app_image=$IMAGE"
+# Construct TF_VAR arguments
+TF_CMD_ARGS="-var=target_clouds=$TF_CLOUDS_LIST -var=deployment_mode=$MODE -var=app_image=$IMAGE"
+if [[ "$CLOUDS_INPUT" == *"gcp"* ]]; then
+  TF_CMD_ARGS="$TF_CMD_ARGS -var=gcp_project_id=$PROJECT_ID"
+fi
+
+terraform apply -auto-approve $TF_CMD_ARGS
 
 # 4. Post-Processing (Ansible for K8s)
 if [[ "$MODE" == "k8s" ]]; then
@@ -85,6 +114,17 @@ if [[ "$MODE" == "k8s" ]]; then
   
   # Ensure kubeconfig exists (Terraform should have created it in root)
   export KUBECONFIG="./kubeconfig.yaml"
+
+  # For GCP, fetch credentials manually to generate kubeconfig
+  if [[ "$CLOUDS_INPUT" == *"gcp"* ]]; then
+     echo "Fetching GKE Credentials..."
+     GKE_NAME=$(terraform output -raw gke_cluster_name)
+     # Assumes default region us-central1; adjust if variable changes
+     gcloud container clusters get-credentials "$GKE_NAME" --region "us-central1"
+     # This overwrites AWS kubeconfig if running both simultaneously locally; 
+     # A more robust solution would merge them, but for now, GCP takes precedence if selected.
+     cp "$HOME/.kube/config" "./kubeconfig.yaml"
+  fi
   
   if [ ! -f "$KUBECONFIG" ]; then
     echo -e "${RED}Error: kubeconfig.yaml not found! Did Terraform fail?${NC}"

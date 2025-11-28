@@ -43,12 +43,20 @@ provider "aws" {
 }
 
 # -----------------
+# GCP Provider Configuration (Uses variable defined in variables.tf)
+# -----------------
+provider "google" {
+  project = var.gcp_project_id
+  region  = var.gcp_region
+}
+
+# -----------------
 # AWS K8S Module Call (EKS)
 # -----------------
 
 module "eks" {
-  # ONLY run if target is 'aws' AND mode is 'k8s'
-  count  = var.target_cloud == "aws" && var.deployment_mode == "k8s" ? 1 : 0
+  # ONLY run if 'aws' is in the list of target clouds AND mode is 'k8s'
+  count  = contains(var.target_clouds, "aws") && var.deployment_mode == "k8s" ? 1 : 0
   source = "./modules/eks"
 
   # Variables passed to the child module (which are defined in root variables.tf)
@@ -59,7 +67,7 @@ module "eks" {
 }
 
 module "aws_container" {
-  count        = var.target_cloud == "aws" && var.deployment_mode == "container" ? 1 : 0
+  count        = contains(var.target_clouds, "aws") && var.deployment_mode == "container" ? 1 : 0
   source       = "./modules/aws-container"
   project_name = var.project_name
   aws_region   = var.aws_region
@@ -74,7 +82,7 @@ module "aws_container" {
 
 
 module "aws_static" {
-  count               = var.target_cloud == "aws" && var.deployment_mode == "static" ? 1 : 0
+  count               = contains(var.target_clouds, "aws") && var.deployment_mode == "static" ? 1 : 0
   source              = "./modules/aws-static" # <- dash, not underscore
   project_name        = var.project_name
   aws_region          = var.aws_region
@@ -87,7 +95,7 @@ module "aws_static" {
 # -----------------
 
 module "aks" {
-  count  = var.target_cloud == "azure" && var.deployment_mode == "k8s" ? 1 : 0
+  count  = contains(var.target_clouds, "azure") && var.deployment_mode == "k8s" ? 1 : 0
   source = "./modules/aks"
 
   # ARGUMENTS ADDED HERE to satisfy modules/aks/variables.tf
@@ -96,8 +104,16 @@ module "aks" {
   cluster_version = var.cluster_version
 }
 
+module "gcp_static" {
+  count               = contains(var.target_clouds, "gcp") && var.deployment_mode == "static" ? 1 : 0
+  source              = "./modules/gcp-static"
+  project_name        = var.project_name
+  gcp_region          = var.gcp_region
+  static_content_path = var.static_content_path
+}
+
 module "gke" {
-  count  = var.target_cloud == "gcp" && var.deployment_mode == "k8s" ? 1 : 0
+  count  = contains(var.target_clouds, "gcp") && var.deployment_mode == "k8s" ? 1 : 0
   source = "./modules/gke"
 
   # ARGUMENTS ADDED HERE to satisfy modules/gke/variables.tf

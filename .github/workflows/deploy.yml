@@ -36,14 +36,24 @@ jobs:
         id: timer_start
         run: echo "start=$(date +%s)" >> "$GITHUB_OUTPUT"
 
-      # AWS creds only when target_cloud == aws (OK to use keys or swap to OIDC later)
-      - name: Configure AWS Credentials (AWS only)
-        if: ${{ inputs.target_cloud == 'aws' }}
+      # AWS creds are required for S3 State Backend, even if deploying to Azure/GCP
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
+
+      # GCP Authentication (Only if deploying to GCP)
+      - name: Configure GCP Credentials
+        if: ${{ inputs.target_cloud == 'gcp' }}
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup Google Cloud SDK
+        if: ${{ inputs.target_cloud == 'gcp' }}
+        uses: google-github-actions/setup-gcloud@v2
 
       # Ensure awscli is available for S3 sync in the null_resource
       - name: Check AWS CLI
@@ -98,7 +108,7 @@ jobs:
           # Helper to read a key if present
           jget() { echo "$OUT_JSON" | jq -r "$1 // empty"; }
 
-          # AWS + k8s: guarded EKS outputs (must match your root output names)
+          # AWS + k8s: guarded EKS outputs
           if [ "$CLOUD" = "aws" ] && [ "$MODE" = "k8s" ]; then
             CLUSTER_ENDPOINT="$(jget '.eks_cluster_endpoint.value')"
             if [ -n "$CLUSTER_ENDPOINT" ]; then
@@ -107,7 +117,18 @@ jobs:
             fi
           fi
 
-          # Static mode (any cloud) — but you currently only implement AWS S3
+          # GCP + k8s: guarded GKE outputs
+          if [ "$CLOUD" = "gcp" ] && [ "$MODE" = "k8s" ]; then
+            GKE_NAME="$(jget '.gke_cluster_name.value')"
+            GKE_ENDPOINT="$(jget '.gke_cluster_endpoint.value')"
+            echo "GKE_NAME=$GKE_NAME" >> "$GITHUB_ENV"
+            if [ -n "$GKE_ENDPOINT" ]; then
+               echo "CLUSTER_ENDPOINT=$GKE_ENDPOINT" >> "$GITHUB_ENV"
+               echo "cluster_endpoint=$GKE_ENDPOINT" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+          # Static mode (AWS or GCP)
           if [ "$MODE" = "static" ]; then
             WEBSITE_URL="$(jget '.website_endpoint.value')"
             if [ -n "$WEBSITE_URL" ]; then
@@ -124,6 +145,15 @@ jobs:
               echo "container_url=$CONTAINER_URL" >> "$GITHUB_OUTPUT"
             fi
           fi
+
+      - name: Configure Kubeconfig for GKE
+        if: ${{ inputs.target_cloud == 'gcp' && inputs.deployment_mode == 'k8s' }}
+        run: |
+          # Retrieve credentials using the cluster name from Terraform outputs
+          # Assumes 'setup-gcloud' has already configured the project from credentials or default
+          gcloud container clusters get-credentials "${{ env.GKE_NAME }}" --region "us-central1"
+          # Copy default config to kubeconfig.yaml for Ansible
+          cp $HOME/.kube/config ./kubeconfig.yaml
 
       - name: Measure Provisioning Time
         id: time_provisioning

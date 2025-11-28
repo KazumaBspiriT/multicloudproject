@@ -1,5 +1,7 @@
 locals {
-  eks_enabled = var.target_cloud == "aws" && var.deployment_mode == "k8s" && length(module.eks) > 0
+  eks_enabled        = contains(var.target_clouds, "aws") && var.deployment_mode == "k8s" && length(module.eks) > 0
+  gke_enabled        = contains(var.target_clouds, "gcp") && var.deployment_mode == "k8s" && length(module.gke) > 0
+  gcp_static_enabled = contains(var.target_clouds, "gcp") && var.deployment_mode == "static" && length(module.gcp_static) > 0
 }
 
 output "eks_cluster_name" {
@@ -17,17 +19,37 @@ output "eks_cluster_ca" {
   description = "Cluster CA (base64; null when not deployed)"
 }
 
+output "gke_cluster_name" {
+  value = local.gke_enabled ? module.gke[0].cluster_name : null
+}
+
+output "gke_cluster_endpoint" {
+  value = local.gke_enabled ? module.gke[0].cluster_endpoint : null
+}
+
+output "gke_kubeconfig_command" {
+  value = local.gke_enabled ? module.gke[0].kubeconfig_raw : null
+}
+
 output "website_endpoint" {
-  value       = var.deployment_mode == "static" && var.target_cloud == "aws" ? module.aws_static[0].cloudfront_url : null
-  description = "The CloudFront distribution URL"
+  value = coalesce(
+    var.deployment_mode == "static" && contains(var.target_clouds, "aws") ? module.aws_static[0].cloudfront_url : null,
+    var.deployment_mode == "static" && contains(var.target_clouds, "gcp") ? module.gcp_static[0].website_url : null,
+    "N/A"
+  )
+  description = "The Website URL"
 }
 
 output "website_bucket" {
-  value       = var.deployment_mode == "static" && var.target_cloud == "aws" ? module.aws_static[0].bucket_name : null
-  description = "The S3 bucket name"
+  value = coalesce(
+    var.deployment_mode == "static" && contains(var.target_clouds, "aws") ? module.aws_static[0].bucket_name : null,
+    var.deployment_mode == "static" && contains(var.target_clouds, "gcp") ? module.gcp_static[0].bucket_name : null,
+    "N/A"
+  )
+  description = "The Storage bucket name"
 }
 
 output "container_url" {
-  value       = var.deployment_mode == "container" && var.target_cloud == "aws" ? module.aws_container[0].service_url : null
+  value       = var.deployment_mode == "container" && contains(var.target_clouds, "aws") ? module.aws_container[0].service_url : null
   description = "The URL of the App Runner service (Container Mode)"
 }

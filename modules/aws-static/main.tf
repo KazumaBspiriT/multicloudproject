@@ -89,7 +89,7 @@ locals {
 
   content_dir   = abspath(var.static_content_path)
   content_files = fileset(local.content_dir, "**")
-  content_hash  = length(local.content_files) == 0 ? "empty" : sha256(join("", [
+  content_hash = length(local.content_files) == 0 ? "empty" : sha256(join("", [
     for f in local.content_files : filesha256("${local.content_dir}/${f}")
   ]))
 }
@@ -136,8 +136,8 @@ data "aws_iam_policy_document" "cf_read" {
 }
 
 resource "aws_s3_bucket_policy" "site" {
-  bucket = aws_s3_bucket.site.id
-  policy = data.aws_iam_policy_document.cf_read.json
+  bucket     = aws_s3_bucket.site.id
+  policy     = data.aws_iam_policy_document.cf_read.json
   depends_on = [aws_s3_bucket_public_access_block.bpa] # Ensure public access block is set first
 }
 

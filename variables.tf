@@ -6,13 +6,16 @@ variable "project_name" {
   default     = "multi-cloud-app"
 }
 
-variable "target_cloud" {
-  description = "The target cloud platform: aws, azure, or gcp."
-  type        = string
-  default     = "aws"
+# CHANGED: Now accepts a list of strings for multi-cloud deployment
+variable "target_clouds" {
+  description = "List of target cloud platforms: aws, azure, gcp."
+  type        = list(string)
+  default     = ["aws"]
   validation {
-    condition     = contains(["aws", "azure", "gcp"], var.target_cloud)
-    error_message = "The target_cloud must be one of: aws, azure, or gcp."
+    condition = alltrue([
+      for c in var.target_clouds : contains(["aws", "azure", "gcp"], c)
+    ])
+    error_message = "All target_clouds must be one of: aws, azure, or gcp."
   }
 }
 
@@ -61,6 +64,12 @@ variable "gcp_region" {
   description = "GCP region for deployment."
   type        = string
   default     = "us-central1"
+}
+
+variable "gcp_project_id" {
+  description = "GCP Project ID"
+  type        = string
+  default     = null # Must be provided if using GCP
 }
 
 variable "additional_admin_arns" {
