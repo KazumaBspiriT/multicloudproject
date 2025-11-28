@@ -54,3 +54,19 @@
         - protocol: TCP
           port: 80
           targetPort: 80
+
+- name: Wait for LoadBalancer Hostname (AWS ELB)
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ playbook_dir }}/../kubeconfig.yaml"
+    api_version: v1
+    kind: Service
+    name: portfolio-service
+    namespace: sample-app
+  register: lb_service
+  until: lb_service.resources[0].status.loadBalancer.ingress is defined
+  retries: 60
+  delay: 10
+
+- name: Display Application URL
+  ansible.builtin.debug:
+    msg: "Application URL: http://{{ lb_service.resources[0].status.loadBalancer.ingress[0].hostname }}"
