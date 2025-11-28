@@ -21,9 +21,10 @@ locals {
       name = module.eks_cluster.cluster_name
       user = {
         exec = {
-          apiVersion = "client.authentication.k8s.io/v1"
-          command    = "aws"
-          args       = ["eks", "get-token", "--cluster-name", module.eks_cluster.cluster_name]
+          apiVersion      = "client.authentication.k8s.io/v1beta1"
+          command         = "aws"
+          args            = ["eks", "get-token", "--cluster-name", module.eks_cluster.cluster_name]
+          interactiveMode = "IfAvailable"
         }
       }
     }]
