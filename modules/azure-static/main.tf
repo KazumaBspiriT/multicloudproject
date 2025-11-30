@@ -53,7 +53,7 @@ resource "null_resource" "upload" {
   }
 
   provisioner "local-exec" {
-    command = "az storage blob upload-batch -s ${local.content_dir} -d '$web' --account-name ${azurerm_storage_account.sa.name} --auth-mode login"
+    command = "az storage blob upload-batch -s ${local.content_dir} -d '$web' --account-name ${azurerm_storage_account.sa.name} --account-key ${azurerm_storage_account.sa.primary_access_key} --auth-mode key"
   }
 }
 
