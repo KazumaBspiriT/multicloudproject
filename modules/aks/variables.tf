@@ -1,6 +1,13 @@
 # modules/aks/variables.tf
 
-# Placeholder variables for AKS.
-variable "project_name" {}
-variable "azure_region" {}
-variable "cluster_version" {}
+variable "project_name" {
+  type = string
+}
+
+variable "azure_region" {
+  type = string
+}
+
+variable "cluster_version" {
+  type = string
+}

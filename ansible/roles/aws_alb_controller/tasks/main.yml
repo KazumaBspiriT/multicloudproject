@@ -1,0 +1,68 @@
+# ansible/roles/aws_alb_controller/tasks/main.yml
+# Install AWS Load Balancer Controller for EKS ALB Ingress
+
+- name: Check if AWS Load Balancer Controller is already installed
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ playbook_dir }}/../kubeconfig.yaml"
+    api_version: apps/v1
+    kind: Deployment
+    name: aws-load-balancer-controller
+    namespace: kube-system
+  register: alb_controller_check
+  ignore_errors: yes
+
+- name: Add EKS Helm repository
+  when: alb_controller_check.resources | length == 0
+  kubernetes.core.helm_repository:
+    name: eks
+    repo_url: https://aws.github.io/eks-charts
+
+- name: Debug variables
+  ansible.builtin.debug:
+    msg:
+      - "eks_cluster_name: {{ eks_cluster_name | default('NOT SET') }}"
+      - "aws_region: {{ aws_region | default('NOT SET') }}"
+      - "eks_vpc_id: {{ eks_vpc_id | default('NOT SET') }}"
+      - "eks_lb_role_arn: {{ eks_lb_role_arn | default('NOT SET') }}"
+
+- name: Generate Helm values file
+  when: alb_controller_check.resources | length == 0
+  ansible.builtin.template:
+    src: "{{ role_path }}/templates/values.yaml.j2"
+    dest: "{{ role_path }}/files/values_generated.yaml"
+
+- name: Install AWS Load Balancer Controller using Helm
+  when: alb_controller_check.resources | length == 0
+  kubernetes.core.helm:
+    kubeconfig: "{{ playbook_dir }}/../kubeconfig.yaml"
+    name: aws-load-balancer-controller
+    chart_ref: eks/aws-load-balancer-controller
+    release_namespace: kube-system
+    create_namespace: true
+    state: present
+    wait: true
+    wait_timeout: "5m"
+    values_files:
+      - "{{ role_path }}/files/values_generated.yaml"
+  register: alb_controller_install
+  retries: 3
+  delay: 10
+  until: alb_controller_install is not failed
+
+- name: Wait for AWS Load Balancer Controller to be ready
+  when: alb_controller_check.resources | length == 0
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ playbook_dir }}/../kubeconfig.yaml"
+    api_version: apps/v1
+    kind: Deployment
+    name: aws-load-balancer-controller
+    namespace: kube-system
+  register: alb_controller_deployment
+  until: alb_controller_deployment.resources[0].status.readyReplicas is defined and alb_controller_deployment.resources[0].status.readyReplicas > 0
+  retries: 30
+  delay: 10
+
+- name: Display AWS Load Balancer Controller status
+  ansible.builtin.debug:
+    msg: "AWS Load Balancer Controller is installed and ready"
+

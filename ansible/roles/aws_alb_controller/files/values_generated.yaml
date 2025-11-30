@@ -1,0 +1,9 @@
+clusterName: "multi-cloud-app-eks-cluster"
+serviceAccount:
+  create: true
+  name: aws-load-balancer-controller
+  annotations:
+    eks.amazonaws.com/role-arn: "arn:aws:iam::864981731192:role/multi-cloud-app-eks-lb-role"
+region: "us-east-2"
+vpcId: "vpc-02103a3688541734b"
+

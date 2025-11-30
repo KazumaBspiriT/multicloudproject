@@ -35,6 +35,12 @@ variable "app_image" {
   default     = "public.ecr.aws/nginx/nginx:latest"
 }
 
+variable "domain_name" {
+  description = "Custom domain name for the application (e.g., myapp.com). Leave empty for default/none."
+  type        = string
+  default     = ""
+}
+
 variable "aws_region" {
   description = "AWS region for deployment."
   type        = string
@@ -44,7 +50,7 @@ variable "aws_region" {
 variable "cluster_version" {
   description = "The Kubernetes version to deploy."
   type        = string
-  default     = "1.29"
+  default     = "1.31"
 }
 
 variable "static_content_path" {
@@ -76,4 +82,10 @@ variable "additional_admin_arns" {
   description = "List of IAM ARNs (Users or Roles) to grant admin access to the cluster."
   type        = list(string)
   default     = []
+}
+
+variable "enable_nat_gateway" {
+  description = "Enable NAT Gateway for EKS private subnets. NAT Gateways cost ~$32/month. Set to false to use public subnets (cost-saving, but less secure)."
+  type        = bool
+  default     = false  # Default to false to save costs
 }

@@ -21,3 +21,8 @@ terraform.rc
 *.tfstate.*
 *.tfvars
 *.tfvars.json
+gke_gcloud_auth_plugin_cache
+gcp-key.json
+kubeconfig.yaml
+tfplan.out
+gke_gcloud_auth_plugin_cache

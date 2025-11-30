@@ -42,12 +42,25 @@ provider "aws" {
   region = var.aws_region
 }
 
+# Additional AWS provider for us-east-1 (required for ACM certificates used by CloudFront)
+provider "aws" {
+  alias  = "us_east_1"
+  region = "us-east-1"
+}
+
 # -----------------
 # GCP Provider Configuration (Uses variable defined in variables.tf)
 # -----------------
 provider "google" {
   project = var.gcp_project_id
   region  = var.gcp_region
+}
+
+# -----------------
+# Azure Provider Configuration
+# -----------------
+provider "azurerm" {
+  features {}
 }
 
 # -----------------
@@ -64,6 +77,8 @@ module "eks" {
   aws_region            = var.aws_region
   cluster_version       = var.cluster_version
   additional_admin_arns = var.additional_admin_arns
+  domain_name           = var.domain_name
+  enable_nat_gateway    = var.enable_nat_gateway
 }
 
 module "aws_container" {
@@ -72,6 +87,7 @@ module "aws_container" {
   project_name = var.project_name
   aws_region   = var.aws_region
   app_image    = var.app_image
+  domain_name  = var.domain_name
 }
 
 
@@ -87,11 +103,23 @@ module "aws_static" {
   project_name        = var.project_name
   aws_region          = var.aws_region
   static_content_path = var.static_content_path
+  domain_name         = var.domain_name
+  # Leave empty to auto-create certificate, or provide existing ARN
+  # If domain_name is provided and this is empty, Terraform will:
+
+  providers = {
+    aws.us_east_1 = aws.us_east_1
+  }
+  # 1. Automatically request ACM certificate
+  # 2. Automatically create validation record in Route 53
+  # 3. Wait for certificate validation
+  # 4. Automatically create alias record pointing to CloudFront
+  acm_certificate_arn = ""
 }
 
 
 # -----------------
-# Placeholder Modules for Azure/GCP (Now passing required placeholder arguments)
+# Azure Modules
 # -----------------
 
 module "aks" {
@@ -103,6 +131,26 @@ module "aks" {
   azure_region    = var.azure_region
   cluster_version = var.cluster_version
 }
+
+module "azure_static" {
+  count               = contains(var.target_clouds, "azure") && var.deployment_mode == "static" ? 1 : 0
+  source              = "./modules/azure-static"
+  project_name        = var.project_name
+  azure_region        = var.azure_region
+  static_content_path = var.static_content_path
+}
+
+module "azure_container" {
+  count        = contains(var.target_clouds, "azure") && var.deployment_mode == "container" ? 1 : 0
+  source       = "./modules/azure-container"
+  project_name = var.project_name
+  azure_region = var.azure_region
+  app_image    = var.app_image
+}
+
+# -----------------
+# GCP Modules
+# -----------------
 
 module "gcp_static" {
   count               = contains(var.target_clouds, "gcp") && var.deployment_mode == "static" ? 1 : 0
@@ -120,4 +168,12 @@ module "gke" {
   project_name    = var.project_name
   gcp_region      = var.gcp_region
   cluster_version = var.cluster_version
+}
+
+module "gcp_container" {
+  count        = contains(var.target_clouds, "gcp") && var.deployment_mode == "container" ? 1 : 0
+  source       = "./modules/gcp-container"
+  project_name = var.project_name
+  gcp_region   = var.gcp_region
+  app_image    = var.app_image
 }

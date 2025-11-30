@@ -11,5 +11,7 @@
         msg: "Starting cluster configuration for deployment mode: {{ deployment_mode }}"
 
   roles:
-    # - k8_addons # Skipped for simplicity (using LoadBalancer service instead)
+    # Install AWS Load Balancer Controller for EKS ALB Ingress (only for AWS k8s with domain)
+    - role: aws_alb_controller
+      when: deployment_mode == "k8s" and 'aws' in (target_clouds | default('')).split(',') and domain_name | length > 0
     - sample_app

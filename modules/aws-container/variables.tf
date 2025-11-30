@@ -11,3 +11,9 @@ variable "app_image" {
   type        = string
 }
 
+variable "domain_name" {
+  description = "Custom domain name for App Runner service (optional)."
+  type        = string
+  default     = ""
+}
+

@@ -8,7 +8,7 @@
     kind: Namespace
     state: present
 
-- name: Deploy sample application (Deployment and Service)
+- name: Deploy sample application (Deployment)
   kubernetes.core.k8s:
     kubeconfig: "{{ playbook_dir }}/../kubeconfig.yaml"
     state: present
@@ -36,7 +36,30 @@
               ports:
               - containerPort: 80
 
-- name: Expose application via LoadBalancer Service
+# With domain (AWS only): Use NodePort + Ingress for HTTPS
+- name: Expose application via NodePort Service (for Ingress)
+  when: domain_name | length > 0 and 'aws' in (target_clouds | default('')).split(',')
+  kubernetes.core.k8s:
+    kubeconfig: "{{ playbook_dir }}/../kubeconfig.yaml"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: portfolio-service
+        namespace: sample-app
+      spec:
+        type: NodePort
+        selector:
+          app: portfolio
+        ports:
+        - protocol: TCP
+          port: 80
+          targetPort: 80
+
+# Without domain (all clouds): Use LoadBalancer for HTTP
+- name: Expose application via LoadBalancer Service (No Domain or Non-AWS)
+  when: domain_name | length == 0 or 'aws' not in (target_clouds | default('')).split(',')
   kubernetes.core.k8s:
     kubeconfig: "{{ playbook_dir }}/../kubeconfig.yaml"
     state: present
@@ -55,7 +78,23 @@
           port: 80
           targetPort: 80
 
-- name: Wait for LoadBalancer Hostname (AWS ELB)
+# Apply Ingress with ALB annotations (AWS only, requires domain)
+- name: Apply Ingress Manifest (Template)
+  when: domain_name | length > 0 and 'aws' in (target_clouds | default('')).split(',')
+  ansible.builtin.template:
+    src: "{{ role_path }}/templates/ingress.yaml.j2"
+    dest: "{{ role_path }}/files/ingress_generated.yaml"
+
+- name: Apply Ingress and Certificate
+  when: domain_name | length > 0 and 'aws' in (target_clouds | default('')).split(',')
+  kubernetes.core.k8s:
+    kubeconfig: "{{ playbook_dir }}/../kubeconfig.yaml"
+    state: present
+    src: "{{ role_path }}/files/ingress_generated.yaml"
+
+# Wait for LoadBalancer to be ready
+- name: Wait for LoadBalancer IP/Hostname
+  when: domain_name | length == 0
   kubernetes.core.k8s_info:
     kubeconfig: "{{ playbook_dir }}/../kubeconfig.yaml"
     api_version: v1
@@ -67,6 +106,49 @@
   retries: 60
   delay: 10
 
-- name: Display Application URL
+# Wait for Ingress ALB to be ready
+- name: Wait for Ingress IP
+  when: domain_name | length > 0 and 'aws' in (target_clouds | default('')).split(',')
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ playbook_dir }}/../kubeconfig.yaml"
+    api_version: networking.k8s.io/v1
+    kind: Ingress
+    name: portfolio-ingress
+    namespace: sample-app
+  register: ingress_info
+  until: ingress_info.resources[0].status.loadBalancer.ingress is defined
+  retries: 60
+  delay: 10
+
+- name: Display Application URL (HTTP - No Domain)
+  when: domain_name | length == 0
   ansible.builtin.debug:
-    msg: "Application URL: http://{{ lb_service.resources[0].status.loadBalancer.ingress[0].hostname }}"
+    msg: "Application URL: http://{{ lb_service.resources[0].status.loadBalancer.ingress[0].hostname | default(lb_service.resources[0].status.loadBalancer.ingress[0].ip) }}"
+
+- name: Display Application URL (HTTPS - With Domain - AWS only)
+  when: domain_name | length > 0 and 'aws' in (target_clouds | default('')).split(',')
+  ansible.builtin.debug:
+    msg: |
+      ==========================================
+      Custom Domain Configuration
+      ==========================================
+      Domain: {{ domain_name }}
+      ALB Hostname: {{ ingress_info.resources[0].status.loadBalancer.ingress[0].hostname }}
+      
+      DNS Configuration Required:
+      1. Add a CNAME record in your DNS provider:
+         Type: CNAME
+         Name: @ (or your subdomain)
+         Value: {{ ingress_info.resources[0].status.loadBalancer.ingress[0].hostname }}
+         TTL: 300
+      
+      2. Wait for DNS propagation (5-60 minutes)
+      
+      3. SSL Certificate Status:
+         - AWS: ACM certificate is automatically created and validated
+         - Certificate ARN is automatically added to Ingress annotation
+         - Domain must be registered with Route 53 for automatic nameserver update
+      
+      4. Once DNS and SSL are ready, access: https://{{ domain_name }}
+      
+      For detailed instructions, see: CUSTOM_DOMAIN_SETUP.md

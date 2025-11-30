@@ -29,3 +29,15 @@ variable "additional_admin_arns" {
   type        = list(string)
   default     = []
 }
+
+variable "domain_name" {
+  description = "Custom domain name for EKS Ingress (optional)."
+  type        = string
+  default     = ""
+}
+
+variable "enable_nat_gateway" {
+  description = "Enable NAT Gateway for private subnets. NAT Gateways cost ~$32/month. Set to false to use public subnets only (cost-saving)."
+  type        = bool
+  default     = false  # Changed default to false to save costs
+}

@@ -1,0 +1,9 @@
+clusterName: "{{ eks_cluster_name | default('multi-cloud-app-eks-cluster') }}"
+serviceAccount:
+  create: true
+  name: aws-load-balancer-controller
+  annotations:
+    eks.amazonaws.com/role-arn: "{{ eks_lb_role_arn }}"
+region: "{{ aws_region | default('us-east-2') }}"
+vpcId: "{{ eks_vpc_id | default('') }}"
+
