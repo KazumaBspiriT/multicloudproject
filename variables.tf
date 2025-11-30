@@ -30,9 +30,15 @@ variable "deployment_mode" {
 }
 
 variable "app_image" {
-  description = "Container image to deploy (used for 'container' or 'k8s' mode)"
+  description = "Container image to deploy (Docker Hub URI for GCP/Azure). Example: nginx:latest"
   type        = string
-  default     = "public.ecr.aws/nginx/nginx:latest"
+  default     = "nginx:latest"
+}
+
+variable "app_image_aws" {
+  description = "AWS ECR (Public/Private) image URI. Required for AWS App Runner if not using 'nginx:latest'. Example: public.ecr.aws/nginx/nginx:latest"
+  type        = string
+  default     = ""
 }
 
 variable "domain_name" {

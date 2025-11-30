@@ -82,12 +82,13 @@ module "eks" {
 }
 
 module "aws_container" {
-  count        = contains(var.target_clouds, "aws") && var.deployment_mode == "container" ? 1 : 0
-  source       = "./modules/aws-container"
-  project_name = var.project_name
-  aws_region   = var.aws_region
-  app_image    = var.app_image
-  domain_name  = var.domain_name
+  count         = contains(var.target_clouds, "aws") && var.deployment_mode == "container" ? 1 : 0
+  source        = "./modules/aws-container"
+  project_name  = var.project_name
+  aws_region    = var.aws_region
+  app_image     = var.app_image
+  app_image_aws = var.app_image_aws
+  domain_name   = var.domain_name
 }
 
 

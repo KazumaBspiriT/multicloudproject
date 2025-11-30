@@ -1,0 +1,29 @@
+==========================================
+Update These Nameservers in Your Registrar
+==========================================
+
+Domain: sumanthdev2324.com
+
+Route 53 Nameservers (copy these):
+----------------------------------
+ns-227.awsdns-28.com
+ns-1210.awsdns-23.org
+ns-1573.awsdns-04.co.uk
+ns-691.awsdns-22.net
+
+Steps:
+------
+1. Log into your domain registrar
+2. Go to DNS/Nameserver settings
+3. Replace existing nameservers with the 4 above
+4. Save changes
+5. Wait 10-30 minutes
+6. Certificate will auto-validate
+
+To check if updated:
+--------------------
+dig NS sumanthdev2324.com +short
+
+Should show the 4 Route 53 nameservers above.
+
+==========================================

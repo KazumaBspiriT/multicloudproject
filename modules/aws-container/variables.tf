@@ -11,9 +11,14 @@ variable "app_image" {
   type        = string
 }
 
+variable "app_image_aws" {
+  description = "Override image URI for AWS (ECR Public/Private). If empty, uses app_image."
+  type        = string
+  default     = ""
+}
+
 variable "domain_name" {
   description = "Custom domain name for App Runner service (optional)."
   type        = string
   default     = ""
 }
-

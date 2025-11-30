@@ -12,9 +12,13 @@ on:
         required: true
         default: 'k8s'
       app_image:
-        description: 'Container Image (for k8s/container modes)'
+        description: 'Container Image (Docker Hub URI for GCP/Azure/General)'
         required: false
         default: 'nginx:latest'
+      app_image_aws:
+        description: 'AWS Image URI (ECR Public/Private). If different from app_image.'
+        required: false
+        default: ''
       domain_name:
         description: 'Custom Domain Name (optional)'
         required: false
@@ -102,6 +106,7 @@ jobs:
             -var="target_clouds=$TF_CLOUDS_LIST" \
             -var="deployment_mode=${{ inputs.deployment_mode }}" \
             -var="app_image=${{ inputs.app_image }}" \
+            -var="app_image_aws=${{ inputs.app_image_aws }}" \
             -var="domain_name=${{ inputs.domain_name }}" \
             -var="enable_nat_gateway=${{ env.ENABLE_NAT_GATEWAY }}" \
             -out=tfplan.out
@@ -341,6 +346,7 @@ jobs:
             -var="target_clouds=$TF_CLOUDS_LIST" \
             -var="deployment_mode=${{ inputs.deployment_mode }}" \
             -var="app_image=${{ inputs.app_image }}" \
+            -var="app_image_aws=${{ inputs.app_image_aws }}" \
             -var="domain_name=${{ inputs.domain_name }}" \
             -var="enable_nat_gateway=${{ env.ENABLE_NAT_GATEWAY }}"
 

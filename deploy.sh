@@ -698,6 +698,9 @@ if [ "$ACTION" == "destroy" ]; then
     if [[ "$CLOUDS_INPUT" == *"gcp"* ]]; then
       TF_CMD_ARGS+=(-var "gcp_project_id=$PROJECT_ID")
     fi
+    if [[ -n "$APP_IMAGE_AWS" ]]; then
+      TF_CMD_ARGS+=(-var "app_image_aws=$APP_IMAGE_AWS")
+    fi
 
     # Run destroy with error handling
     if ! terraform destroy -auto-approve "${TF_CMD_ARGS[@]}" 2>&1; then
@@ -1020,6 +1023,9 @@ echo "target_clouds = $TF_CLOUDS_LIST" > "$TEMP_TFVARS"
 TF_CMD_ARGS=(-var-file="$TEMP_TFVARS" -var "deployment_mode=$MODE" -var "app_image=$IMAGE" -var "domain_name=$DOMAIN_NAME")
 if [[ "$CLOUDS_INPUT" == *"gcp"* ]]; then
   TF_CMD_ARGS+=(-var "gcp_project_id=$PROJECT_ID")
+fi
+if [[ -n "$APP_IMAGE_AWS" ]]; then
+  TF_CMD_ARGS+=(-var "app_image_aws=$APP_IMAGE_AWS")
 fi
 
 if ! terraform apply -auto-approve "${TF_CMD_ARGS[@]}"; then

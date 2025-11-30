@@ -1,0 +1,29 @@
+{
+  "Comment": "Delete manual records to free zone",
+  "Changes": [
+    {
+      "Action": "DELETE",
+      "ResourceRecordSet": {
+        "Name": "sumanthdev2324.com.",
+        "Type": "A",
+        "AliasTarget": {
+            "HostedZoneId": "Z3AADJGX6KTTL2",
+            "DNSName": "k8s-sampleap-portfoli-532cdaedad-191483955.us-east-2.elb.amazonaws.com.",
+            "EvaluateTargetHealth": true
+        }
+      }
+    },
+    {
+      "Action": "DELETE",
+      "ResourceRecordSet": {
+        "Name": "www.sumanthdev2324.com.",
+        "Type": "A",
+        "AliasTarget": {
+            "HostedZoneId": "Z3AADJGX6KTTL2",
+            "DNSName": "k8s-sampleap-portfoli-532cdaedad-191483955.us-east-2.elb.amazonaws.com.",
+            "EvaluateTargetHealth": true
+        }
+      }
+    }
+  ]
+}
