@@ -27,13 +27,32 @@ resource "aws_route53_zone" "domain" {
   }
 }
 
+# IAM Role for App Runner to pull from Private ECR (required if using private image)
+resource "aws_iam_role" "apprunner_access" {
+  name = "${var.project_name}-apprunner-access-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = { Service = "build.apprunner.amazonaws.com" }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "apprunner_access_policy" {
+  role       = aws_iam_role.apprunner_access.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSAppRunnerServicePolicyForECRAccess"
+}
+
 # Use the created zone
 locals {
   route53_zone_id = var.domain_name != "" && length(aws_route53_zone.domain) > 0 ? aws_route53_zone.domain[0].zone_id : ""
   
   # Use AWS-specific image if provided, otherwise fallback to generic image
-  # User is responsible for providing a valid ECR (Public/Private) URI
   effective_image = var.app_image_aws != "" ? var.app_image_aws : var.app_image
+  # Determine if image is public ECR or private
+  is_ecr_public = can(regex("^public\\.ecr\\.aws", local.effective_image))
 }
 
 # Request ACM certificate for App Runner
@@ -192,9 +211,14 @@ resource "aws_apprunner_service" "app" {
   service_name = "${var.project_name}-service"
 
   source_configuration {
+    authentication_configuration {
+      # Only needed for Private ECR
+      access_role_arn = local.is_ecr_public ? null : aws_iam_role.apprunner_access.arn
+    }
+
     image_repository {
       image_identifier      = local.effective_image
-      image_repository_type = "ECR_PUBLIC" # Starts simple with public images
+      image_repository_type = local.is_ecr_public ? "ECR_PUBLIC" : "ECR"
       image_configuration {
         port                          = "80"
         runtime_environment_variables = {}
