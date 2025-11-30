@@ -14,7 +14,7 @@ on:
       app_image:
         description: 'Container Image (for k8s/container modes)'
         required: false
-        default: 'public.ecr.aws/nginx/nginx:latest'
+        default: 'nginx:latest'
       domain_name:
         description: 'Custom Domain Name (optional)'
         required: false
