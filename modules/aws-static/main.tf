@@ -376,6 +376,11 @@ output "nameservers" {
   description = "Nameservers for the created hosted zone (update these in your domain registrar)"
 }
 
+output "route53_zone_id" {
+  value       = local.route53_zone_id
+  description = "Route 53 hosted zone ID"
+}
+
 # Outputs
 output "bucket_name" {
   value = aws_s3_bucket.site.bucket
@@ -393,4 +398,14 @@ output "custom_domain_url" {
 output "certificate_arn" {
   value       = var.acm_certificate_arn != "" ? var.acm_certificate_arn : (var.domain_name != "" && length(aws_acm_certificate.domain) > 0 ? aws_acm_certificate.domain[0].arn : null)
   description = "ACM certificate ARN (automatically created or provided)"
+}
+
+output "cloudfront_domain_name" {
+  value       = aws_cloudfront_distribution.cdn.domain_name
+  description = "CloudFront distribution domain name"
+}
+
+output "cloudfront_hosted_zone_id" {
+  value       = aws_cloudfront_distribution.cdn.hosted_zone_id
+  description = "CloudFront distribution hosted zone ID (for Alias records)"
 }

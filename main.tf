@@ -225,3 +225,47 @@ resource "aws_route53_record" "aws_subdomain" {
   # Point to the App Runner custom domain target (has certificate for aws. subdomain)
   records = [try(module.aws_container[0].aws_subdomain_dns_target, "")]
 }
+
+# -----------------
+# Multi-Cloud DNS Integration for STATIC Mode
+# -----------------
+
+# 1. Azure Subdomain (azure.yourdomain.com) -> Azure Storage Static Website
+resource "aws_route53_record" "azure_static_subdomain" {
+  count = contains(var.target_clouds, "aws") && contains(var.target_clouds, "azure") && var.domain_name != "" && var.deployment_mode == "static" ? 1 : 0
+
+  zone_id = module.aws_static[0].route53_zone_id
+  name    = "azure.${var.domain_name}"
+  type    = "CNAME"
+  ttl     = 300
+  # Azure Storage static website endpoint (extract domain from URL like https://account.z13.web.core.windows.net)
+  records = [replace(replace(module.azure_static[0].website_url, "https://", ""), "http://", "")]
+}
+
+# 2. GCP Subdomain (gcp.yourdomain.com) -> GCP Storage Bucket
+resource "aws_route53_record" "gcp_static_subdomain" {
+  count = contains(var.target_clouds, "aws") && contains(var.target_clouds, "gcp") && var.domain_name != "" && var.deployment_mode == "static" ? 1 : 0
+
+  zone_id = module.aws_static[0].route53_zone_id
+  name    = "gcp.${var.domain_name}"
+  type    = "CNAME"
+  ttl     = 300
+  # GCP Storage bucket website endpoint (extract domain from URL)
+  # Format: bucket-name.storage.googleapis.com or c.storage.googleapis.com/bucket-name
+  records = [replace(replace(module.gcp_static[0].website_url, "http://", ""), "/index.html", "")]
+}
+
+# 3. AWS Subdomain (aws.yourdomain.com) -> CloudFront (Alias A Record)
+resource "aws_route53_record" "aws_static_subdomain" {
+  count = contains(var.target_clouds, "aws") && var.domain_name != "" && var.deployment_mode == "static" ? 1 : 0
+
+  zone_id = module.aws_static[0].route53_zone_id
+  name    = "aws.${var.domain_name}"
+  type    = "A"
+
+  alias {
+    name                   = module.aws_static[0].cloudfront_domain_name
+    zone_id                = module.aws_static[0].cloudfront_hosted_zone_id
+    evaluate_target_health = false
+  }
+}
