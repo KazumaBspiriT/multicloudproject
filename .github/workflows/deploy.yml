@@ -59,6 +59,19 @@ jobs:
         if: ${{ contains(inputs.target_cloud, 'gcp') }}
         uses: google-github-actions/setup-gcloud@v2
 
+      # Azure CLI Authentication (Required for az commands in null_resource)
+      - name: Authenticate Azure CLI
+        if: ${{ contains(inputs.target_cloud, 'azure') }}
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.ARM_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.ARM_CLIENT_SECRET }}",
+              "subscriptionId": "${{ secrets.ARM_SUBSCRIPTION_ID }}",
+              "tenantId": "${{ secrets.ARM_TENANT_ID }}"
+            }
+
       # Ensure awscli is available for S3 sync in the null_resource
       - name: Check AWS CLI
         if: ${{ inputs.target_cloud == 'aws' && inputs.deployment_mode == 'static' }}
