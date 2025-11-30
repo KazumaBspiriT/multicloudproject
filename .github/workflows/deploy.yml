@@ -89,9 +89,13 @@ jobs:
       - name: Terraform Plan
         id: plan
         run: |
+          # Convert comma-separated string to JSON list
+          CLOUDS_INPUT="${{ inputs.target_cloud }}"
+          TF_CLOUDS_LIST="[\"$(echo $CLOUDS_INPUT | sed 's/,/\",\"/g')\"]"
+          
           terraform plan \
             -input=false \
-            -var="target_cloud=${{ inputs.target_cloud }}" \
+            -var="target_clouds=$TF_CLOUDS_LIST" \
             -var="deployment_mode=${{ inputs.deployment_mode }}" \
             -var="app_image=${{ inputs.app_image }}" \
             -var="domain_name=${{ inputs.domain_name }}" \
@@ -316,9 +320,15 @@ jobs:
       - name: Terraform Destroy (on failure)
         if: failure()
         run: |
+          CLOUDS_INPUT="${{ inputs.target_cloud }}"
+          TF_CLOUDS_LIST="[\"$(echo $CLOUDS_INPUT | sed 's/,/\",\"/g')\"]"
+          
           terraform destroy -auto-approve \
-            -var="target_cloud=${{ inputs.target_cloud }}" \
-            -var="deployment_mode=${{ inputs.deployment_mode }}"
+            -var="target_clouds=$TF_CLOUDS_LIST" \
+            -var="deployment_mode=${{ inputs.deployment_mode }}" \
+            -var="app_image=${{ inputs.app_image }}" \
+            -var="domain_name=${{ inputs.domain_name }}" \
+            -var="enable_nat_gateway=${{ env.ENABLE_NAT_GATEWAY }}"
 
       - name: Publish Metrics
         run: |
