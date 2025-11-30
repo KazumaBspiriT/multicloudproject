@@ -49,15 +49,14 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # GCP Authentication (Only if deploying to GCP)
+      # GCP Authentication (Required for Terraform Provider init)
       - name: Configure GCP Credentials
-        if: ${{ inputs.target_cloud == 'gcp' }}
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       - name: Setup Google Cloud SDK
-        if: ${{ inputs.target_cloud == 'gcp' }}
+        if: ${{ contains(inputs.target_cloud, 'gcp') }}
         uses: google-github-actions/setup-gcloud@v2
 
       # Ensure awscli is available for S3 sync in the null_resource
@@ -88,6 +87,11 @@ jobs:
 
       - name: Terraform Plan
         id: plan
+        env:
+          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
         run: |
           # Convert comma-separated string to JSON list
           CLOUDS_INPUT="${{ inputs.target_cloud }}"
@@ -104,6 +108,11 @@ jobs:
 
       - name: Terraform Apply (Provisioning)
         id: apply
+        env:
+          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
         run: terraform apply -input=false tfplan.out
 
       - name: Export Terraform outputs safely
@@ -319,6 +328,11 @@ jobs:
       # Destroy resources ONLY if the pipeline fails (failure() returns true)
       - name: Terraform Destroy (on failure)
         if: failure()
+        env:
+          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
         run: |
           CLOUDS_INPUT="${{ inputs.target_cloud }}"
           TF_CLOUDS_LIST="[\"$(echo $CLOUDS_INPUT | sed 's/,/\",\"/g')\"]"
