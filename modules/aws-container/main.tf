@@ -27,7 +27,37 @@ resource "aws_route53_zone" "domain" {
   }
 }
 
-# IAM Role for App Runner to pull from Private ECR (required if using private image)
+# ECR Repository for mirroring images (Auto-created to host Docker Hub images)
+resource "aws_ecr_repository" "mirror" {
+  name                 = "${var.project_name}-mirror"
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
+  image_scanning_configuration { scan_on_push = false }
+  tags = {
+    Name      = "${var.project_name}-mirror"
+    ManagedBy = "Terraform"
+  }
+}
+
+# Mirror logic: Automatically pull public image and push to Private ECR
+resource "null_resource" "mirror_image" {
+  triggers = {
+    image = var.app_image
+    repo  = aws_ecr_repository.mirror.repository_url
+  }
+  provisioner "local-exec" {
+    interpreter = ["/bin/bash", "-c"]
+    command     = <<EOT
+      echo "Mirroring ${var.app_image} to ECR..."
+      aws ecr get-login-password --region ${var.aws_region} | docker login --username AWS --password-stdin ${aws_ecr_repository.mirror.repository_url}
+      docker pull ${var.app_image}
+      docker tag ${var.app_image} ${aws_ecr_repository.mirror.repository_url}:latest
+      docker push ${aws_ecr_repository.mirror.repository_url}:latest
+    EOT
+  }
+}
+
+# IAM Role for App Runner to pull from Private ECR (Access Role)
 resource "aws_iam_role" "apprunner_access" {
   name = "${var.project_name}-apprunner-access-role"
   assume_role_policy = jsonencode({
@@ -48,11 +78,6 @@ resource "aws_iam_role_policy_attachment" "apprunner_access_policy" {
 # Use the created zone
 locals {
   route53_zone_id = var.domain_name != "" && length(aws_route53_zone.domain) > 0 ? aws_route53_zone.domain[0].zone_id : ""
-  
-  # Use AWS-specific image if provided, otherwise fallback to generic image
-  effective_image = var.app_image_aws != "" ? var.app_image_aws : var.app_image
-  # Determine if image is public ECR or private
-  is_ecr_public = can(regex("^public\\.ecr\\.aws", local.effective_image))
 }
 
 # Request ACM certificate for App Runner
@@ -212,20 +237,21 @@ resource "aws_apprunner_service" "app" {
 
   source_configuration {
     authentication_configuration {
-      # Only needed for Private ECR
-      access_role_arn = local.is_ecr_public ? null : aws_iam_role.apprunner_access.arn
+      access_role_arn = aws_iam_role.apprunner_access.arn
     }
 
     image_repository {
-      image_identifier      = local.effective_image
-      image_repository_type = local.is_ecr_public ? "ECR_PUBLIC" : "ECR"
+      image_identifier      = "${aws_ecr_repository.mirror.repository_url}:latest"
+      image_repository_type = "ECR"
       image_configuration {
         port                          = "80"
         runtime_environment_variables = {}
       }
     }
-    auto_deployments_enabled = false
+    auto_deployments_enabled = true
   }
+  
+  depends_on = [null_resource.mirror_image]
 
   instance_configuration {
     cpu               = "0.25 vCPU"

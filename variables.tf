@@ -35,12 +35,6 @@ variable "app_image" {
   default     = "nginx:latest"
 }
 
-variable "app_image_aws" {
-  description = "AWS ECR (Public/Private) image URI. Required for AWS App Runner if not using 'nginx:latest'. Example: public.ecr.aws/nginx/nginx:latest"
-  type        = string
-  default     = ""
-}
-
 variable "domain_name" {
   description = "Custom domain name for the application (e.g., myapp.com). Leave empty for default/none."
   type        = string
