@@ -87,7 +87,6 @@ module "aws_container" {
   project_name  = var.project_name
   aws_region    = var.aws_region
   app_image     = var.app_image
-  app_image_aws = var.app_image_aws
   domain_name   = var.domain_name
 }
 
