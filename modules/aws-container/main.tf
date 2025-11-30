@@ -30,6 +30,10 @@ resource "aws_route53_zone" "domain" {
 # Use the created zone
 locals {
   route53_zone_id = var.domain_name != "" && length(aws_route53_zone.domain) > 0 ? aws_route53_zone.domain[0].zone_id : ""
+  
+  # AWS App Runner requires ECR or ECR Public. If provided image is "nginx:latest" (Docker Hub style),
+  # swap it for the ECR Public equivalent.
+  effective_image = can(regex("^public\\.ecr\\.aws", var.app_image)) || can(regex("amazonaws\\.com", var.app_image)) ? var.app_image : "public.ecr.aws/nginx/nginx:latest"
 }
 
 # Request ACM certificate for App Runner
@@ -189,7 +193,7 @@ resource "aws_apprunner_service" "app" {
 
   source_configuration {
     image_repository {
-      image_identifier      = var.app_image
+      image_identifier      = local.effective_image
       image_repository_type = "ECR_PUBLIC" # Starts simple with public images
       image_configuration {
         port                          = "80"

@@ -1,6 +1,12 @@
 # modules/gcp-container/main.tf
 # Deploys a container to Google Cloud Run (Serverless)
 
+locals {
+  # GCP Cloud Run prefers Docker Hub (nginx:latest) or GCR/Artifact Registry.
+  # If the input is ECR Public, fallback to nginx:latest to avoid errors.
+  effective_image = can(regex("^public\\.ecr\\.aws", var.app_image)) ? "nginx:latest" : var.app_image
+}
+
 resource "google_cloud_run_v2_service" "default" {
   name     = "${var.project_name}-run"
   location = var.gcp_region
@@ -8,7 +14,7 @@ resource "google_cloud_run_v2_service" "default" {
 
   template {
     containers {
-      image = var.app_image
+      image = local.effective_image
       
       ports {
         container_port = 80
