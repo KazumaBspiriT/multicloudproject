@@ -34,8 +34,9 @@ locals {
   # AWS App Runner requires ECR or ECR Public.
   # Map common Docker Hub images to their ECR Public mirrors
   image_map = {
-    "nginx:latest"            = "public.ecr.aws/nginx/nginx:latest"
-    "yeasy/simple-web:latest" = "public.ecr.aws/yeasy/simple-web:latest"
+    "nginx:latest"                 = "public.ecr.aws/nginx/nginx:latest"
+    "yeasy/simple-web:latest"      = "public.ecr.aws/nginx/nginx:latest" # Fallback to nginx as yeasy is missing
+    "alexwhen/docker-2048:latest"  = "public.ecr.aws/l6m2t8p7/docker-2048:latest"
   }
 
   effective_image = lookup(local.image_map, var.app_image, (

@@ -5,8 +5,9 @@ locals {
   # GCP Cloud Run prefers Docker Hub or GCR/Artifact Registry.
   # Map ECR Public images back to Docker Hub
   image_map = {
-    "public.ecr.aws/nginx/nginx:latest"      = "nginx:latest"
-    "public.ecr.aws/yeasy/simple-web:latest" = "yeasy/simple-web:latest"
+    "public.ecr.aws/nginx/nginx:latest"             = "nginx:latest"
+    "public.ecr.aws/yeasy/simple-web:latest"        = "yeasy/simple-web:latest"
+    "public.ecr.aws/l6m2t8p7/docker-2048:latest"    = "alexwhen/docker-2048:latest"
   }
 
   effective_image = lookup(local.image_map, var.app_image, (
