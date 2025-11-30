@@ -11,6 +11,31 @@ RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+# Parse arguments
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        -a|--action) ACTION="$2"; shift ;;
+        -c|--clouds) CLOUDS_INPUT="$2"; shift ;;
+        -m|--mode) MODE="$2"; shift ;;
+        -i|--image) IMAGE="$2"; shift ;;
+        -d|--domain) DOMAIN_NAME="$2"; shift ;;
+        --aws-image) APP_IMAGE_AWS="$2"; shift ;;
+        -h|--help)
+            echo "Usage: ./deploy.sh [options]"
+            echo "Options:"
+            echo "  -a, --action <deploy|destroy>   Action to perform"
+            echo "  -c, --clouds <aws,gcp,azure>    Target clouds (comma-separated)"
+            echo "  -m, --mode <k8s|container|static> Deployment mode"
+            echo "  -i, --image <uri>               Container image URI (Docker Hub)"
+            echo "  --aws-image <uri>               AWS-specific image URI (ECR)"
+            echo "  -d, --domain <domain>           Custom domain name"
+            exit 0
+            ;;
+        *) echo "Unknown parameter passed: $1"; exit 1 ;;
+    esac
+    shift
+done
+
 # Function to check if a command exists
 check_command() {
     if ! command -v "$1" &> /dev/null; then
@@ -195,12 +220,16 @@ if ! check_prerequisites; then
 fi
 
 # 1. Inputs
-read -p "Select Action (deploy/destroy) [default: deploy]: " ACTION
-ACTION=${ACTION:-deploy}
+if [ -z "$ACTION" ]; then
+    read -p "Select Action (deploy/destroy) [default: deploy]: " ACTION
+    ACTION=${ACTION:-deploy}
+fi
 
-echo "Enter Target Clouds (comma-separated, e.g. aws,gcp,azure) [default: aws]: "
-read -p "> " CLOUDS_INPUT
-CLOUDS_INPUT=${CLOUDS_INPUT:-aws}
+if [ -z "$CLOUDS_INPUT" ]; then
+    echo "Enter Target Clouds (comma-separated, e.g. aws,gcp,azure) [default: aws]: "
+    read -p "> " CLOUDS_INPUT
+    CLOUDS_INPUT=${CLOUDS_INPUT:-aws}
+fi
 
 # Convert comma-separated string to JSON array string for Terraform
 IFS=',' read -ra ADDR <<< "$CLOUDS_INPUT"
@@ -264,17 +293,21 @@ echo -e "\n${GREEN}[OK] All cloud prerequisites satisfied${NC}\n"
 
 # For destroy, only ask for mode (skip image/domain)
 if [ "$ACTION" == "destroy" ]; then
-  echo "Select Deployment Mode to destroy for [$CLOUDS_INPUT] (k8s/static/container/all) [default: k8s]: "
-  echo "  - 'all' will destroy ALL resources (k8s, static, container) for selected cloud(s)"
-  read -p "> " MODE
-  MODE=${MODE:-k8s}
+  if [ -z "$MODE" ]; then
+    echo "Select Deployment Mode to destroy for [$CLOUDS_INPUT] (k8s/static/container/all) [default: k8s]: "
+    echo "  - 'all' will destroy ALL resources (k8s, static, container) for selected cloud(s)"
+    read -p "> " MODE
+    MODE=${MODE:-k8s}
+  fi
   IMAGE=""
   DOMAIN_NAME=""
 else
   # For deploy, ask for all details
-  echo "Select Deployment Mode for [$CLOUDS_INPUT] (k8s/static/container) [default: k8s]: "
-  read -p "> " MODE
-  MODE=${MODE:-k8s}
+  if [ -z "$MODE" ]; then
+    echo "Select Deployment Mode for [$CLOUDS_INPUT] (k8s/static/container) [default: k8s]: "
+    read -p "> " MODE
+    MODE=${MODE:-k8s}
+  fi
 
   IMAGE=""
   if [[ "$MODE" == "k8s" || "$MODE" == "container" ]]; then
@@ -291,9 +324,11 @@ else
       DEFAULT_IMAGE="public.ecr.aws/nginx/nginx:latest"
     fi
     
-    echo "Enter Container Image [default: $DEFAULT_IMAGE]: "
-    read -p "> " IMAGE
-    IMAGE=${IMAGE:-$DEFAULT_IMAGE}
+    if [ -z "$IMAGE" ]; then
+        echo "Enter Container Image [default: $DEFAULT_IMAGE]: "
+        read -p "> " IMAGE
+        IMAGE=${IMAGE:-$DEFAULT_IMAGE}
+    fi
   fi
 
 # Show custom domain requirements BEFORE prompting (only for AWS)
@@ -314,9 +349,11 @@ if [[ "$CLOUDS_INPUT" != *"aws"* ]]; then
   echo ""
 fi
 
-echo "Enter Custom Domain (e.g., myapp.com) [optional]: "
-read -p "> " DOMAIN_NAME
-DOMAIN_NAME=${DOMAIN_NAME:-""}
+if [ -z "$DOMAIN_NAME" ]; then
+  echo "Enter Custom Domain (e.g., myapp.com) [optional]: "
+  read -p "> " DOMAIN_NAME
+  DOMAIN_NAME=${DOMAIN_NAME:-""}
+fi
 
 # Validate domain input for non-AWS clouds
 if [[ -n "$DOMAIN_NAME" ]] && [[ "$CLOUDS_INPUT" != *"aws"* ]]; then
