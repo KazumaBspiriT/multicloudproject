@@ -3,6 +3,11 @@ output "service_url" {
   value       = "https://${aws_apprunner_service.app.service_url}"
 }
 
+output "service_domain" {
+  description = "The raw domain of the App Runner service (no protocol)"
+  value       = aws_apprunner_service.app.service_url
+}
+
 output "service_status" {
   value = aws_apprunner_service.app.status
 }
@@ -31,4 +36,3 @@ output "apex_domain_warning" {
   description = "Warning if apex domain is used (CNAME not allowed at apex)"
   value       = var.domain_name != "" && local.is_apex_domain ? "Apex domain detected. CNAME records are not allowed at apex. Configure DNS manually or use a subdomain (e.g., www.${var.domain_name}). DNS target: ${length(aws_apprunner_custom_domain_association.domain) > 0 ? aws_apprunner_custom_domain_association.domain[0].dns_target : "N/A"}" : null
 }
-

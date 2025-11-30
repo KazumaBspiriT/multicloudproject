@@ -3,24 +3,137 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Multi-Cloud Portfolio</title>
+    <title>Multi-Cloud Infrastructure Project</title>
     <style>
-        body { font-family: 'Inter', sans-serif; text-align: center; padding: 50px; background-color: #f4f7f6; color: #1f2937; }
-        .container { max-width: 800px; margin: 0 auto; background: white; padding: 40px; border-radius: 12px; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); }
-        h1 { color: #10b981; margin-bottom: 10px; }
-        p { margin-bottom: 20px; color: #4b5563; }
-        .footer { margin-top: 30px; font-size: 0.8em; color: #9ca3af; }
+        :root {
+            --aws-color: #FF9900;
+            --azure-color: #007FFF;
+            --gcp-color: #4285F4;
+            --bg-color: #1a1a1a;
+            --card-bg: #2d2d2d;
+            --text-color: #ffffff;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+        header {
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            width: 100%;
+            padding: 2rem 0;
+            text-align: center;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        h1 { margin: 0; font-size: 2.5rem; text-transform: uppercase; letter-spacing: 2px; }
+        .subtitle { font-weight: 300; margin-top: 0.5rem; opacity: 0.9; }
+        
+        .container {
+            max-width: 1200px;
+            width: 90%;
+            margin: 3rem auto;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+        }
+        
+        .card {
+            background-color: var(--card-bg);
+            border-radius: 15px;
+            padding: 2rem;
+            text-align: center;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        .card:hover {
+            transform: translateY(-10px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.4);
+        }
+        .card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0; height: 5px;
+        }
+        .aws::before { background-color: var(--aws-color); }
+        .azure::before { background-color: var(--azure-color); }
+        .gcp::before { background-color: var(--gcp-color); }
+        
+        .icon { font-size: 4rem; margin-bottom: 1rem; }
+        h2 { margin-bottom: 1rem; }
+        p { line-height: 1.6; opacity: 0.8; }
+        
+        .tech-stack {
+            margin-top: 3rem;
+            text-align: center;
+        }
+        .tags {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+            margin-top: 1rem;
+        }
+        .tag {
+            background: #444;
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            font-size: 0.9rem;
+        }
+        footer {
+            margin-top: auto;
+            padding: 2rem;
+            text-align: center;
+            opacity: 0.6;
+            font-size: 0.9rem;
+        }
     </style>
 </head>
 <body>
+    <header>
+        <h1>Multi-Cloud Demo</h1>
+        <div class="subtitle">Orchestrated via Terraform & GitHub Actions</div>
+    </header>
+
     <div class="container">
-        <h1>Hello from Multi-Cloud!</h1>
-        <p>This page confirms successful deployment via the <strong>Static Hosting</strong> pipeline.</p>
-        <p>Current Target: <strong id="cloud-target">AWS S3</strong> | Mode: <strong>Static</strong></p>
-        <p>Your multi-cloud automation project is working!</p>
-        <div class="footer">
-            Deployed by Terraform, provisioned in seconds on free-tier storage.
+        <div class="card aws">
+            <div class="icon">☁️</div>
+            <h2>AWS</h2>
+            <p>Deployed on <strong>App Runner</strong> (Container Mode) or <strong>EKS</strong> (K8s Mode). Images mirrored automatically to ECR Private.</p>
+        </div>
+
+        <div class="card azure">
+            <div class="icon">🟦</div>
+            <h2>Azure</h2>
+            <p>Deployed on <strong>Container Instances</strong> (ACI) or <strong>AKS</strong>. Pulling directly from Docker Hub.</p>
+        </div>
+
+        <div class="card gcp">
+            <div class="icon">🌈</div>
+            <h2>Google Cloud</h2>
+            <p>Deployed on <strong>Cloud Run</strong> (Serverless) or <strong>GKE</strong>. Scalable and serverless execution.</p>
         </div>
     </div>
+
+    <div class="tech-stack">
+        <h2>Technology Stack</h2>
+        <div class="tags">
+            <span class="tag">Terraform</span>
+            <span class="tag">Docker</span>
+            <span class="tag">GitHub Actions</span>
+            <span class="tag">Bash Scripting</span>
+            <span class="tag">Nginx</span>
+        </div>
+    </div>
+
+    <footer>
+        <p>Deployed by Sumanth's Automation Pipeline • 2024</p>
+    </footer>
 </body>
 </html>
