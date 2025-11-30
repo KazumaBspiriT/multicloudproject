@@ -2,9 +2,16 @@
 # Deploys a container to Google Cloud Run (Serverless)
 
 locals {
-  # GCP Cloud Run prefers Docker Hub (nginx:latest) or GCR/Artifact Registry.
-  # If the input is ECR Public, fallback to nginx:latest to avoid errors.
-  effective_image = can(regex("^public\\.ecr\\.aws", var.app_image)) ? "nginx:latest" : var.app_image
+  # GCP Cloud Run prefers Docker Hub or GCR/Artifact Registry.
+  # Map ECR Public images back to Docker Hub
+  image_map = {
+    "public.ecr.aws/nginx/nginx:latest"      = "nginx:latest"
+    "public.ecr.aws/yeasy/simple-web:latest" = "yeasy/simple-web:latest"
+  }
+
+  effective_image = lookup(local.image_map, var.app_image, (
+    can(regex("^public\\.ecr\\.aws", var.app_image)) ? "nginx:latest" : var.app_image
+  ))
 }
 
 resource "google_cloud_run_v2_service" "default" {
