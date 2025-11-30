@@ -275,7 +275,7 @@ resource "aws_apprunner_service" "app" {
   }
 }
 
-# Associate custom domain with App Runner
+# Associate custom domain with App Runner (Root Domain)
 # Note: App Runner handles certificate validation automatically when domain is associated
 # We don't need to wait for certificate validation - App Runner will validate it
 # The association will be in "pending_certificate_dns_validation" status until certificate validates
@@ -291,6 +291,54 @@ resource "aws_apprunner_custom_domain_association" "domain" {
     aws_acm_certificate.domain,
     aws_route53_record.cert_validation,
     null_resource.update_nameservers # Ensure nameservers are synced
+  ]
+}
+
+# ACM Certificate for aws. subdomain
+resource "aws_acm_certificate" "aws_subdomain" {
+  count             = var.domain_name != "" ? 1 : 0
+  domain_name      = "aws.${var.domain_name}"
+  validation_method = "DNS"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  tags = {
+    Name      = "${var.project_name}-aws-subdomain"
+    ManagedBy = "Terraform"
+  }
+}
+
+# Validation record for aws. subdomain certificate
+resource "aws_route53_record" "aws_subdomain_cert_validation" {
+  count   = var.domain_name != "" ? 1 : 0
+  zone_id = aws_route53_zone.domain[0].zone_id
+  name    = tolist(aws_acm_certificate.aws_subdomain[0].domain_validation_options)[0].resource_record_name
+  type    = tolist(aws_acm_certificate.aws_subdomain[0].domain_validation_options)[0].resource_record_type
+  records = [tolist(aws_acm_certificate.aws_subdomain[0].domain_validation_options)[0].resource_record_value]
+  ttl     = 60
+
+  allow_overwrite = true
+
+  depends_on = [
+    aws_route53_zone.domain,
+    aws_acm_certificate.aws_subdomain,
+    null_resource.update_nameservers
+  ]
+}
+
+# Associate aws. subdomain with App Runner
+resource "aws_apprunner_custom_domain_association" "aws_subdomain" {
+  count                = var.domain_name != "" ? 1 : 0
+  domain_name          = "aws.${var.domain_name}"
+  service_arn          = aws_apprunner_service.app.arn
+  enable_www_subdomain = false
+
+  depends_on = [
+    aws_acm_certificate.aws_subdomain,
+    aws_route53_record.aws_subdomain_cert_validation,
+    null_resource.update_nameservers
   ]
 }
 

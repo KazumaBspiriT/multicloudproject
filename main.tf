@@ -213,7 +213,7 @@ resource "aws_route53_record" "gcp_subdomain" {
   records = ["ghs.googlehosted.com"]
 }
 
-# 3. AWS Subdomain (aws.yourdomain.com) -> App Runner (Default Domain)
+# 3. AWS Subdomain (aws.yourdomain.com) -> App Runner (Custom Domain with Certificate)
 # This provides a consistent "aws." endpoint alongside azure. and gcp.
 resource "aws_route53_record" "aws_subdomain" {
   count = contains(var.target_clouds, "aws") && var.domain_name != "" && var.deployment_mode == "container" ? 1 : 0
@@ -222,6 +222,6 @@ resource "aws_route53_record" "aws_subdomain" {
   name    = "aws.${var.domain_name}"
   type    = "CNAME"
   ttl     = 300
-  # Point to the raw App Runner DNS (e.g. abc.awsapprunner.com)
-  records = [module.aws_container[0].service_domain]
+  # Point to the App Runner custom domain target (has certificate for aws. subdomain)
+  records = [try(module.aws_container[0].aws_subdomain_dns_target, "")]
 }

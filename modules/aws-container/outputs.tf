@@ -32,6 +32,11 @@ output "dns_target" {
   value       = var.domain_name != "" && length(aws_apprunner_custom_domain_association.domain) > 0 ? aws_apprunner_custom_domain_association.domain[0].dns_target : null
 }
 
+output "aws_subdomain_dns_target" {
+  description = "App Runner DNS target for aws. subdomain custom domain"
+  value       = var.domain_name != "" && length(aws_apprunner_custom_domain_association.aws_subdomain) > 0 ? aws_apprunner_custom_domain_association.aws_subdomain[0].dns_target : null
+}
+
 output "apex_domain_warning" {
   description = "Warning if apex domain is used (CNAME not allowed at apex)"
   value       = var.domain_name != "" && local.is_apex_domain ? "Apex domain detected. CNAME records are not allowed at apex. Configure DNS manually or use a subdomain (e.g., www.${var.domain_name}). DNS target: ${length(aws_apprunner_custom_domain_association.domain) > 0 ? aws_apprunner_custom_domain_association.domain[0].dns_target : "N/A"}" : null
