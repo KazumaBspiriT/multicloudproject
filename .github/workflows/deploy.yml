@@ -330,7 +330,16 @@ jobs:
           ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
           ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
           ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
-        run: terraform apply -input=false tfplan.out
+        run: |
+          TERRAFORM_START=$(date +%s)
+          terraform apply -input=false tfplan.out
+          TERRAFORM_END=$(date +%s)
+          TERRAFORM_DURATION=$((TERRAFORM_END - TERRAFORM_START))
+          TERRAFORM_MIN=$((TERRAFORM_DURATION / 60))
+          TERRAFORM_SEC=$((TERRAFORM_DURATION % 60))
+          echo "TERRAFORM_TIME=${TERRAFORM_MIN}m ${TERRAFORM_SEC}s" >> $GITHUB_ENV
+          echo "terraform_duration=${TERRAFORM_DURATION}" >> $GITHUB_OUTPUT
+          echo "✅ Terraform apply completed in ${TERRAFORM_MIN}m ${TERRAFORM_SEC}s"
 
       - name: Export Terraform outputs safely
         if: ${{ inputs.action == 'deploy' }}
@@ -1142,6 +1151,87 @@ jobs:
           echo "Waiting for namespace cleanup..."
           sleep 10
 
+      # Pre-destroy cleanup: Delete AWS Load Balancers (ALBs) before VPC deletion
+      - name: Pre-Destroy Cleanup (AWS Load Balancers)
+        if: ${{ inputs.action == 'destroy' && contains(inputs.target_cloud, 'aws') }}
+        run: |
+          echo "Deleting AWS Load Balancers (ALBs) before VPC deletion..."
+          AWS_REGION="${{ env.AWS_REGION }}"
+          
+          # Get all Application Load Balancers
+          ALB_ARNS=$(aws elbv2 describe-load-balancers --region "$AWS_REGION" \
+            --query 'LoadBalancers[?Type==`application`].LoadBalancerArn' \
+            --output text 2>/dev/null || echo "")
+          
+          if [[ -n "$ALB_ARNS" ]] && [[ "$ALB_ARNS" != "None" ]]; then
+            echo "Found ALBs to delete:"
+            echo "$ALB_ARNS" | tr '\t' '\n' | while read -r alb_arn; do
+              if [[ -n "$alb_arn" ]]; then
+                ALB_NAME=$(aws elbv2 describe-load-balancers --region "$AWS_REGION" \
+                  --load-balancer-arns "$alb_arn" \
+                  --query 'LoadBalancers[0].LoadBalancerName' \
+                  --output text 2>/dev/null || echo "")
+                echo "  - $ALB_NAME ($alb_arn)"
+              fi
+            done
+            
+            # Delete each ALB
+            echo "$ALB_ARNS" | tr '\t' '\n' | while read -r alb_arn; do
+              if [[ -n "$alb_arn" ]]; then
+                echo "Deleting ALB: $alb_arn"
+                aws elbv2 delete-load-balancer \
+                  --region "$AWS_REGION" \
+                  --load-balancer-arn "$alb_arn" 2>/dev/null || echo "⚠️  Failed to delete ALB: $alb_arn"
+              fi
+            done
+            
+            # Wait for ALBs to be deleted (max 5 minutes)
+            echo "Waiting for ALBs to be deleted..."
+            for i in {1..60}; do
+              REMAINING_ALBS=$(aws elbv2 describe-load-balancers --region "$AWS_REGION" \
+                --query 'LoadBalancers[?Type==`application`].LoadBalancerArn' \
+                --output text 2>/dev/null || echo "")
+              
+              if [[ -z "$REMAINING_ALBS" ]] || [[ "$REMAINING_ALBS" == "None" ]]; then
+                echo "✅ All ALBs deleted successfully"
+                break
+              fi
+              
+              if [[ $i -eq 60 ]]; then
+                echo "⚠️  Some ALBs may still be deleting. Continuing with destroy..."
+              else
+                sleep 5
+                echo -n "."
+              fi
+            done
+            echo ""
+          else
+            echo "✅ No ALBs found to delete"
+          fi
+          
+          # Also check for Network Load Balancers (NLBs) if any
+          NLB_ARNS=$(aws elbv2 describe-load-balancers --region "$AWS_REGION" \
+            --query 'LoadBalancers[?Type==`network`].LoadBalancerArn' \
+            --output text 2>/dev/null || echo "")
+          
+          if [[ -n "$NLB_ARNS" ]] && [[ "$NLB_ARNS" != "None" ]]; then
+            echo "Found NLBs to delete:"
+            echo "$NLB_ARNS" | tr '\t' '\n' | while read -r nlb_arn; do
+              if [[ -n "$nlb_arn" ]]; then
+                NLB_NAME=$(aws elbv2 describe-load-balancers --region "$AWS_REGION" \
+                  --load-balancer-arns "$nlb_arn" \
+                  --query 'LoadBalancers[0].LoadBalancerName' \
+                  --output text 2>/dev/null || echo "")
+                echo "  - $NLB_NAME ($nlb_arn)"
+                echo "Deleting NLB: $nlb_arn"
+                aws elbv2 delete-load-balancer \
+                  --region "$AWS_REGION" \
+                  --load-balancer-arn "$nlb_arn" 2>/dev/null || echo "⚠️  Failed to delete NLB: $nlb_arn"
+              fi
+            done
+            sleep 10
+          fi
+
       # Pre-destroy cleanup: Delete Route 53 records
       - name: Pre-Destroy Cleanup (Route 53 Records)
         if: ${{ inputs.action == 'destroy' && inputs.domain_name != '' && contains(inputs.target_cloud, 'aws') }}
@@ -1260,7 +1350,100 @@ jobs:
             TF_DESTROY_ARGS+=(-var="gcp_project_id=${{ steps.gcp_project.outputs.project_id }}")
           fi
           
-          terraform destroy "${TF_DESTROY_ARGS[@]}"
+          terraform destroy "${TF_DESTROY_ARGS[@]}" || {
+            echo "⚠️  Terraform destroy encountered errors, but continuing with cleanup..."
+          }
+
+      # Post-destroy cleanup: Attempt to delete hosted zone (non-blocking)
+      - name: Post-Destroy Cleanup (Hosted Zone Deletion)
+        if: ${{ inputs.action == 'destroy' && inputs.domain_name != '' && contains(inputs.target_cloud, 'aws') }}
+        continue-on-error: true
+        run: |
+          echo "Attempting to delete Route 53 hosted zone (non-blocking)..."
+          
+          # Extract apex domain
+          DOMAIN="${{ inputs.domain_name }}"
+          if [[ "$DOMAIN" =~ ^www\. ]]; then
+            APEX_DOMAIN="${DOMAIN#www.}"
+          elif [[ "$DOMAIN" =~ ^[^.]+\. ]]; then
+            PARTS=$(echo "$DOMAIN" | tr '.' '\n' | wc -l)
+            if [[ $PARTS -gt 2 ]]; then
+              APEX_DOMAIN=$(echo "$DOMAIN" | sed 's/^[^.]*\.//')
+            else
+              APEX_DOMAIN="$DOMAIN"
+            fi
+          else
+            APEX_DOMAIN="$DOMAIN"
+          fi
+          
+          # Find hosted zone
+          ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$APEX_DOMAIN" --query 'HostedZones[0].Id' --output text 2>/dev/null | cut -d'/' -f3)
+          
+          if [[ -n "$ZONE_ID" ]] && [[ "$ZONE_ID" != "None" ]]; then
+            echo "Found hosted zone: $ZONE_ID"
+            
+            # Check if there are any remaining records (except NS and SOA)
+            REMAINING_RECORDS=$(aws route53 list-resource-record-sets --hosted-zone-id "$ZONE_ID" \
+              --max-items 1000 \
+              --query "ResourceRecordSets[?Type != 'NS' && Type != 'SOA']" \
+              --output json 2>/dev/null || echo "[]")
+            
+            if command -v jq &> /dev/null; then
+              RECORD_COUNT=$(echo "$REMAINING_RECORDS" | jq 'length' 2>/dev/null || echo "0")
+              
+              if [[ "$RECORD_COUNT" -gt 0 ]] && [[ "$RECORD_COUNT" != "0" ]]; then
+                echo "⚠️  Warning: Hosted zone still has $RECORD_COUNT record(s). Attempting to delete them first..."
+                
+                # Try to delete remaining records
+                CLEANUP_BATCH=$(echo "$REMAINING_RECORDS" | jq '{
+                  Changes: [.[] | {
+                    Action: "DELETE",
+                    ResourceRecordSet: ({
+                      Name: .Name,
+                      Type: .Type,
+                      TTL: (.TTL // 300),
+                      ResourceRecords: (.ResourceRecords // []),
+                      AliasTarget: (.AliasTarget // empty)
+                    } | with_entries(select(.value != null and .value != [])))
+                  }]
+                }' 2>/dev/null)
+                
+                if [[ -n "$CLEANUP_BATCH" ]] && [[ "$CLEANUP_BATCH" != "{}" ]]; then
+                  TEMP_CLEANUP=$(mktemp)
+                  echo "$CLEANUP_BATCH" > "$TEMP_CLEANUP"
+                  aws route53 change-resource-record-sets \
+                    --hosted-zone-id "$ZONE_ID" \
+                    --change-batch "file://$TEMP_CLEANUP" >/dev/null 2>&1 || echo "⚠️  Could not delete remaining records"
+                  rm -f "$TEMP_CLEANUP"
+                  sleep 10
+                fi
+              fi
+            fi
+            
+            # Attempt to delete hosted zone
+            echo "Attempting to delete hosted zone: $ZONE_ID"
+            if aws route53 delete-hosted-zone --id "$ZONE_ID" 2>/dev/null; then
+              echo "✅ Hosted zone deleted successfully"
+            else
+              echo ""
+              echo "⚠️  ⚠️  ⚠️  WARNING: Could not delete hosted zone automatically ⚠️  ⚠️  ⚠️"
+              echo ""
+              echo "The hosted zone deletion failed. This is non-blocking and the destroy process will continue."
+              echo ""
+              echo "📋 Manual Action Required:"
+              echo "   1. Go to AWS Route 53 Console: https://console.aws.amazon.com/route53/"
+              echo "   2. Find the hosted zone for: $APEX_DOMAIN"
+              echo "   3. Delete it manually if you no longer need it"
+              echo ""
+              echo "   Hosted Zone ID: $ZONE_ID"
+              echo "   Domain: $APEX_DOMAIN"
+              echo ""
+              echo "Note: Hosted zones cost \$0.50/month per zone. Make sure to delete it to avoid charges."
+              echo ""
+            fi
+          else
+            echo "✅ No hosted zone found (may have been deleted by Terraform)"
+          fi
 
       # Post-destroy cleanup: Check for remaining Route 53 records
       - name: Post-Destroy Cleanup (Route 53 Records)
