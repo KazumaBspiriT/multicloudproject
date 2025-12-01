@@ -311,15 +311,15 @@ jobs:
           # AWS + k8s: guarded EKS outputs
           # Check if "aws" is in the target_cloud string (handles "aws", "aws,gcp", "aws,azure", "aws,gcp,azure", etc.)
           if [[ "$CLOUD" == *"aws"* ]] && [ "$MODE" = "k8s" ]; then
-            CLUSTER_ENDPOINT="$(jget '.eks_cluster_endpoint.value')"
+            EKS_CLUSTER_ENDPOINT="$(jget '.eks_cluster_endpoint.value')"
             EKS_CLUSTER_NAME="$(jget '.eks_cluster_name.value')"
             EKS_VPC_ID="$(jget '.eks_vpc_id.value')"
             EKS_LB_ROLE_ARN="$(jget '.eks_lb_role_arn.value')"
             ACM_CERT_ARN="$(jget '.eks_acm_certificate_arn.value')"
             
-            if [ -n "$CLUSTER_ENDPOINT" ]; then
-              echo "CLUSTER_ENDPOINT=$CLUSTER_ENDPOINT" >> "$GITHUB_ENV"
-              echo "cluster_endpoint=$CLUSTER_ENDPOINT" >> "$GITHUB_OUTPUT"
+            if [ -n "$EKS_CLUSTER_ENDPOINT" ]; then
+              echo "EKS_CLUSTER_ENDPOINT=$EKS_CLUSTER_ENDPOINT" >> "$GITHUB_ENV"
+              echo "cluster_endpoint=$EKS_CLUSTER_ENDPOINT" >> "$GITHUB_OUTPUT"
             fi
             if [ -n "$EKS_CLUSTER_NAME" ]; then echo "EKS_CLUSTER_NAME=$EKS_CLUSTER_NAME" >> "$GITHUB_ENV"; fi
             if [ -n "$EKS_VPC_ID" ]; then echo "EKS_VPC_ID=$EKS_VPC_ID" >> "$GITHUB_ENV"; fi
@@ -334,6 +334,7 @@ jobs:
             GKE_ENDPOINT="$(jget '.gke_cluster_endpoint.value')"
             echo "GKE_NAME=$GKE_NAME" >> "$GITHUB_ENV"
             if [ -n "$GKE_ENDPOINT" ]; then
+               echo "GKE_CLUSTER_ENDPOINT=$GKE_ENDPOINT" >> "$GITHUB_ENV"
                echo "CLUSTER_ENDPOINT=$GKE_ENDPOINT" >> "$GITHUB_ENV"
                echo "cluster_endpoint=$GKE_ENDPOINT" >> "$GITHUB_OUTPUT"
             fi
@@ -837,8 +838,8 @@ jobs:
           # K8s Mode URLs
           if [ "${{ inputs.deployment_mode }}" = "k8s" ]; then
             echo "📦 Kubernetes Clusters:"
-            if [[ "${{ inputs.target_cloud }}" == *"aws"* ]] && [ -n "${{ env.CLUSTER_ENDPOINT }}" ]; then
-              echo "  - AWS EKS API: ${{ env.CLUSTER_ENDPOINT }}"
+            if [[ "${{ inputs.target_cloud }}" == *"aws"* ]] && [ -n "${{ env.EKS_CLUSTER_ENDPOINT }}" ]; then
+              echo "  - AWS EKS API: ${{ env.EKS_CLUSTER_ENDPOINT }}"
               if [[ -n "${{ inputs.domain_name }}" ]]; then
                 echo "  - AWS Application: https://${{ inputs.domain_name }} (ALB with custom domain)"
               else
@@ -852,8 +853,8 @@ jobs:
                 fi
               fi
             fi
-            if [[ "${{ inputs.target_cloud }}" == *"gcp"* ]] && [ -n "${{ env.CLUSTER_ENDPOINT }}" ]; then
-              echo "  - GCP GKE API: ${{ env.CLUSTER_ENDPOINT }}"
+            if [[ "${{ inputs.target_cloud }}" == *"gcp"* ]] && [ -n "${{ env.GKE_CLUSTER_ENDPOINT }}" ]; then
+              echo "  - GCP GKE API: ${{ env.GKE_CLUSTER_ENDPOINT }}"
               # Try to get LoadBalancer URL from kubectl
               if [ -f kubeconfig.yaml ]; then
                 export KUBECONFIG=${{ github.workspace }}/kubeconfig.yaml
@@ -864,6 +865,11 @@ jobs:
               fi
             fi
             if [[ "${{ inputs.target_cloud }}" == *"azure"* ]]; then
+              # Get AKS endpoint from terraform output
+              AKS_ENDPOINT=$(terraform output -raw aks_cluster_endpoint 2>/dev/null || echo "")
+              if [ -n "$AKS_ENDPOINT" ]; then
+                echo "  - Azure AKS API: $AKS_ENDPOINT"
+              fi
               # Try to get LoadBalancer URL from kubectl
               if [ -f kubeconfig.yaml ]; then
                 export KUBECONFIG=${{ github.workspace }}/kubeconfig.yaml
@@ -922,6 +928,76 @@ jobs:
           fi
           
           echo ""
+          
+      # Verify cluster endpoints with cloud CLI commands
+      - name: Verify Cluster Endpoints (Multi-Cloud)
+        if: ${{ inputs.action == 'deploy' && inputs.deployment_mode == 'k8s' }}
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "🔍 Verifying Cluster Endpoints"
+          echo "=========================================="
+          
+          # Verify AWS EKS endpoint
+          if [[ "${{ inputs.target_cloud }}" == *"aws"* ]] && [ -n "${{ env.EKS_CLUSTER_NAME }}" ]; then
+            echo ""
+            echo "AWS EKS:"
+            echo "  Terraform Output: ${{ env.EKS_CLUSTER_ENDPOINT }}"
+            AWS_ACTUAL=$(aws eks describe-cluster --name "${{ env.EKS_CLUSTER_NAME }}" --query 'cluster.endpoint' --output text 2>/dev/null || echo "N/A")
+            echo "  AWS CLI Result: $AWS_ACTUAL"
+            if [ "$AWS_ACTUAL" != "N/A" ] && [ "$AWS_ACTUAL" != "${{ env.EKS_CLUSTER_ENDPOINT }}" ]; then
+              echo "  ⚠️  WARNING: Endpoints don't match!"
+            else
+              echo "  ✅ Endpoints match"
+            fi
+          fi
+          
+          # Verify GCP GKE endpoint
+          if [[ "${{ inputs.target_cloud }}" == *"gcp"* ]] && [ -n "${{ env.GKE_NAME }}" ]; then
+            echo ""
+            echo "GCP GKE:"
+            echo "  Terraform Output: ${{ env.GKE_CLUSTER_ENDPOINT }}"
+            GCP_PROJECT=$(gcloud config get-value project 2>/dev/null || echo "$(echo '${{ secrets.GCP_SA_KEY }}' | jq -r '.project_id // empty' 2>/dev/null || echo '')")
+            if [ -n "$GCP_PROJECT" ]; then
+              GCP_ACTUAL=$(gcloud container clusters describe "${{ env.GKE_NAME }}" --region "us-central1" --project "$GCP_PROJECT" --format="value(endpoint)" 2>/dev/null || echo "N/A")
+              echo "  GCP CLI Result: $GCP_ACTUAL"
+              if [ "$GCP_ACTUAL" != "N/A" ] && [ "$GCP_ACTUAL" != "${{ env.GKE_CLUSTER_ENDPOINT }}" ]; then
+                echo "  ⚠️  WARNING: Endpoints don't match!"
+              else
+                echo "  ✅ Endpoints match"
+              fi
+            else
+              echo "  ⚠️  Could not determine GCP project"
+            fi
+          fi
+          
+          # Verify Azure AKS endpoint
+          if [[ "${{ inputs.target_cloud }}" == *"azure"* ]]; then
+            echo ""
+            echo "Azure AKS:"
+            AKS_NAME=$(terraform output -raw aks_cluster_name 2>/dev/null || echo "")
+            AKS_RG=$(terraform output -raw aks_resource_group_name 2>/dev/null || echo "")
+            AKS_TF_ENDPOINT=$(terraform output -raw aks_cluster_endpoint 2>/dev/null || echo "N/A")
+            echo "  Terraform Output: $AKS_TF_ENDPOINT"
+            if [ -n "$AKS_NAME" ] && [ -n "$AKS_RG" ]; then
+              AZURE_ACTUAL=$(az aks show --resource-group "$AKS_RG" --name "$AKS_NAME" --query 'fqdn' -o tsv 2>/dev/null || echo "N/A")
+              # AKS endpoint is usually in format: <cluster-name>.<region>.cloudapp.azure.com
+              # But the API endpoint might be different, let's get the kubeconfig host
+              AKS_API_ENDPOINT=$(az aks show --resource-group "$AKS_RG" --name "$AKS_NAME" --query 'privateFqdn' -o tsv 2>/dev/null || az aks show --resource-group "$AKS_RG" --name "$AKS_NAME" --query 'fqdn' -o tsv 2>/dev/null || echo "N/A")
+              echo "  Azure CLI FQDN: $AZURE_ACTUAL"
+              echo "  Azure CLI API Endpoint: $AKS_API_ENDPOINT"
+              # Extract IP from endpoint if it's an IP
+              if [[ "$AKS_TF_ENDPOINT" =~ ^https?://([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+) ]]; then
+                AKS_TF_IP="${BASH_REMATCH[1]}"
+                echo "  Terraform Endpoint IP: $AKS_TF_IP"
+              fi
+            else
+              echo "  ⚠️  Could not get AKS cluster name or resource group"
+            fi
+          fi
+          
+          echo ""
+          echo "=========================================="
 
       # ==========================================
       # DESTROY WORKFLOW
