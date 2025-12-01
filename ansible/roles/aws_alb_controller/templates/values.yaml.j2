@@ -1,4 +1,4 @@
-clusterName: "{{ eks_cluster_name | default('multi-cloud-app-eks-cluster') }}"
+clusterName: "{{ eks_cluster_name | default('multi-cloud-app-eks-cluster') | trim }}"
 serviceAccount:
   create: true
   name: aws-load-balancer-controller

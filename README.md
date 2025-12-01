@@ -475,7 +475,22 @@ The validation step runs automatically at the start of the pipeline and will sho
 
 ## 🌐 Custom Domain Configuration
 
-### DNS Setup
+### DNS Setup by Cloud Provider
+
+**AWS (All Modes):**
+- ✅ **Fully Automated**: Route 53 hosted zone, DNS records, SSL certificates
+- ✅ **Automatic Nameserver Update**: For Route 53 registered domains
+- ✅ **Certificate Validation**: Automatic via Route 53 DNS validation
+
+**GCP (Container/Static):**
+- ⚠️ **Manual Domain Verification**: Required for Cloud Run custom domains
+- ✅ **Automatic DNS Records**: Created in Route 53 (if AWS is also deployed)
+
+**Azure (Container/Static):**
+- ✅ **Automatic DNS Records**: Created in Route 53 (if AWS is also deployed)
+- ⚠️ **Azure k8s (AKS)**: **Not currently supported** - DNS/SSL setup not implemented
+
+### DNS Setup Details
 
 When you provide a custom domain, the project automatically:
 
@@ -535,8 +550,16 @@ This allows you to access the same application deployed across all three clouds 
 
 #### Kubernetes (k8s)
 - **AWS**: EKS cluster with managed node groups
+  - ✅ **Custom Domain Support**: Route 53, ACM certificates, ALB Ingress
+  - ✅ **Automatic DNS**: DNS records and certificate validation
 - **GCP**: GKE cluster (autopilot or standard)
-- **Azure**: Not supported in k8s mode
+  - ⚠️ **Custom Domain**: Manual setup required (see GCP Cloud Run domain verification)
+- **Azure**: AKS cluster
+  - ⚠️ **Custom Domain**: **Not currently supported** - DNS/SSL setup not implemented
+  - ℹ️ **Note**: AKS cluster is created, but domain configuration requires:
+    - Azure DNS zone or external DNS provider
+    - Application Gateway Ingress Controller (AGIC) or NGINX Ingress
+    - SSL certificate (Azure Key Vault or Let's Encrypt)
 - **Application**: Deployed via Ansible using Kubernetes manifests
 
 #### Container

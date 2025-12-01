@@ -309,7 +309,8 @@ jobs:
           jget() { echo "$OUT_JSON" | jq -r "$1 // empty"; }
 
           # AWS + k8s: guarded EKS outputs
-          if [ "$CLOUD" = "aws" ] && [ "$MODE" = "k8s" ]; then
+          # Check if "aws" is in the target_cloud string (handles "aws", "aws,gcp", "aws,azure", "aws,gcp,azure", etc.)
+          if [[ "$CLOUD" == *"aws"* ]] && [ "$MODE" = "k8s" ]; then
             CLUSTER_ENDPOINT="$(jget '.eks_cluster_endpoint.value')"
             EKS_CLUSTER_NAME="$(jget '.eks_cluster_name.value')"
             EKS_VPC_ID="$(jget '.eks_vpc_id.value')"
@@ -327,7 +328,8 @@ jobs:
           fi
 
           # GCP + k8s: guarded GKE outputs
-          if [ "$CLOUD" = "gcp" ] && [ "$MODE" = "k8s" ]; then
+          # Check if "gcp" is in the target_cloud string (handles multi-cloud scenarios)
+          if [[ "$CLOUD" == *"gcp"* ]] && [ "$MODE" = "k8s" ]; then
             GKE_NAME="$(jget '.gke_cluster_name.value')"
             GKE_ENDPOINT="$(jget '.gke_cluster_endpoint.value')"
             echo "GKE_NAME=$GKE_NAME" >> "$GITHUB_ENV"
@@ -356,7 +358,7 @@ jobs:
           fi
 
       - name: Configure Kubeconfig for GKE
-        if: ${{ inputs.action == 'deploy' && inputs.target_cloud == 'gcp' && inputs.deployment_mode == 'k8s' }}
+        if: ${{ inputs.action == 'deploy' && contains(inputs.target_cloud, 'gcp') && inputs.deployment_mode == 'k8s' }}
         run: |
           # Retrieve credentials using the cluster name from Terraform outputs
           # Assumes 'setup-gcloud' has already configured the project from credentials or default
@@ -419,8 +421,16 @@ jobs:
             echo "Ansible files not present, skipping."
             exit 0
           fi
-          ansible-playbook -i ansible/inventory.yml ansible/playbook.yml \
-            --extra-vars "deployment_mode=${{ inputs.deployment_mode }} app_image=${{ inputs.app_image }} domain_name=${{ inputs.domain_name }} target_clouds=${{ inputs.target_cloud }} acm_certificate_arn=${{ env.ACM_CERT_ARN }} eks_cluster_name=${{ env.EKS_CLUSTER_NAME }} eks_vpc_id=${{ env.EKS_VPC_ID }} aws_region=${{ env.AWS_REGION }} eks_lb_role_arn=${{ env.EKS_LB_ROLE_ARN }}"
+          
+          # Build extra-vars, only include AWS-specific vars if AWS is in target clouds
+          EXTRA_VARS="deployment_mode=${{ inputs.deployment_mode }} app_image=${{ inputs.app_image }} domain_name=${{ inputs.domain_name }} target_clouds=${{ inputs.target_cloud }}"
+          
+          # Add AWS-specific vars only if AWS is in target clouds
+          if [[ "${{ inputs.target_cloud }}" == *"aws"* ]]; then
+            EXTRA_VARS="$EXTRA_VARS acm_certificate_arn=${{ env.ACM_CERT_ARN }} eks_cluster_name=${{ env.EKS_CLUSTER_NAME }} eks_vpc_id=${{ env.EKS_VPC_ID }} aws_region=${{ env.AWS_REGION }} eks_lb_role_arn=${{ env.EKS_LB_ROLE_ARN }}"
+          fi
+          
+          ansible-playbook -i ansible/inventory.yml ansible/playbook.yml --extra-vars "$EXTRA_VARS"
 
       - name: Update Route 53 DNS (Auto)
         if: ${{ inputs.action == 'deploy' && inputs.deployment_mode == 'k8s' && inputs.target_cloud == 'aws' && inputs.domain_name != '' }}
