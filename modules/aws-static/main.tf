@@ -153,9 +153,11 @@ resource "null_resource" "update_nameservers" {
 }
 
 # Request ACM certificate (only if domain_name provided and no ARN given)
+# Use wildcard certificate to cover all subdomains (aws., azure., gcp., etc.)
 resource "aws_acm_certificate" "domain" {
   count             = var.domain_name != "" && var.acm_certificate_arn == "" ? 1 : 0
-  domain_name       = var.domain_name
+  domain_name       = "*.${local.apex_domain}"
+  subject_alternative_names = [local.apex_domain]  # Also cover root domain
   validation_method = "DNS"
 
   # Certificate must be in us-east-1 for CloudFront
@@ -166,7 +168,7 @@ resource "aws_acm_certificate" "domain" {
   }
 
   tags = {
-    Name      = "${var.project_name}-${var.domain_name}"
+    Name      = "${var.project_name}-${local.apex_domain}-wildcard"
     ManagedBy = "Terraform"
   }
 }
@@ -174,15 +176,15 @@ resource "aws_acm_certificate" "domain" {
 # Note: If acm_certificate_arn is provided, we use it directly in CloudFront
 # No need for a data source since we already have the ARN
 
-# Create validation record in Route 53 (automatically)
+# Create validation records in Route 53 (automatically)
+# Wildcard certificates have 2 validation records: one for *.domain and one for domain
 # IMPORTANT: This depends on nameservers being updated first
-# domain_validation_options is a set, so we use tolist() to convert to list
 resource "aws_route53_record" "cert_validation" {
-  count   = var.domain_name != "" && var.acm_certificate_arn == "" ? 1 : 0
+  count   = var.domain_name != "" && var.acm_certificate_arn == "" ? length(aws_acm_certificate.domain[0].domain_validation_options) : 0
   zone_id = aws_route53_zone.domain[0].zone_id
-  name    = tolist(aws_acm_certificate.domain[0].domain_validation_options)[0].resource_record_name
-  type    = tolist(aws_acm_certificate.domain[0].domain_validation_options)[0].resource_record_type
-  records = [tolist(aws_acm_certificate.domain[0].domain_validation_options)[0].resource_record_value]
+  name    = tolist(aws_acm_certificate.domain[0].domain_validation_options)[count.index].resource_record_name
+  type    = tolist(aws_acm_certificate.domain[0].domain_validation_options)[count.index].resource_record_type
+  records = [tolist(aws_acm_certificate.domain[0].domain_validation_options)[count.index].resource_record_value]
   ttl     = 60
 
   allow_overwrite = true
@@ -198,7 +200,7 @@ resource "aws_route53_record" "cert_validation" {
 resource "aws_acm_certificate_validation" "domain" {
   count                   = var.domain_name != "" && var.acm_certificate_arn == "" ? 1 : 0
   certificate_arn         = aws_acm_certificate.domain[0].arn
-  validation_record_fqdns = [aws_route53_record.cert_validation[0].fqdn]
+  validation_record_fqdns = aws_route53_record.cert_validation[*].fqdn
 
   provider = aws.us_east_1
 
@@ -285,8 +287,12 @@ resource "aws_cloudfront_distribution" "cdn" {
   }
 
   # Add custom domain aliases if domain_name is provided and certificate is available
+  # Include both root domain and aws. subdomain for multi-cloud DNS
   # IMPORTANT: Only add alias if certificate is validated (prevents CloudFront creation before validation)
-  aliases = var.domain_name != "" && (var.acm_certificate_arn != "" || length(aws_acm_certificate_validation.domain) > 0) ? [var.domain_name] : []
+  aliases = var.domain_name != "" && (var.acm_certificate_arn != "" || length(aws_acm_certificate_validation.domain) > 0) ? concat(
+    [var.domain_name],  # Root domain (e.g., www.sumanthdev2324.com or sumanthdev2324.com)
+    ["aws.${local.apex_domain}"]  # AWS subdomain (e.g., aws.sumanthdev2324.com)
+  ) : []
 
   # CRITICAL: CloudFront must wait for certificate validation before creation
   # This ensures alias and certificate are configured from the start

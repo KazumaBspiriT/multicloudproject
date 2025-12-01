@@ -64,6 +64,16 @@ provider "azurerm" {
 }
 
 # -----------------
+# Local Values (Apex Domain Extraction)
+# -----------------
+# Extract apex domain for subdomain creation
+# If domain is www.example.com, extract example.com for subdomains like aws.example.com
+locals {
+  domain_parts = var.domain_name != "" ? split(".", var.domain_name) : []
+  apex_domain  = var.domain_name != "" && length(local.domain_parts) > 2 ? join(".", slice(local.domain_parts, length(local.domain_parts) - 2, length(local.domain_parts))) : var.domain_name
+}
+
+# -----------------
 # AWS K8S Module Call (EKS)
 # -----------------
 
@@ -194,8 +204,8 @@ resource "aws_route53_record" "azure_subdomain" {
   # Get Zone ID from AWS module
   zone_id = module.aws_container[0].route53_zone_id
   
-  # Create subdomain 'azure'
-  name    = "azure.${var.domain_name}"
+  # Create subdomain 'azure' using apex domain
+  name    = "azure.${local.apex_domain}"
   type    = "A"
   ttl     = 300
   records = [module.azure_container[0].ip_address]
@@ -207,7 +217,7 @@ resource "aws_route53_record" "gcp_subdomain" {
   count = contains(var.target_clouds, "aws") && contains(var.target_clouds, "gcp") && var.domain_name != "" && var.deployment_mode == "container" ? 1 : 0
 
   zone_id = module.aws_container[0].route53_zone_id
-  name    = "gcp.${var.domain_name}"
+  name    = "gcp.${local.apex_domain}"
   type    = "CNAME"
   ttl     = 300
   records = ["ghs.googlehosted.com"]
@@ -219,7 +229,7 @@ resource "aws_route53_record" "aws_subdomain" {
   count = contains(var.target_clouds, "aws") && var.domain_name != "" && var.deployment_mode == "container" ? 1 : 0
 
   zone_id = module.aws_container[0].route53_zone_id
-  name    = "aws.${var.domain_name}"
+  name    = "aws.${local.apex_domain}"
   type    = "CNAME"
   ttl     = 300
   # Point to the App Runner custom domain target (has certificate for aws. subdomain)
@@ -235,7 +245,7 @@ resource "aws_route53_record" "azure_static_subdomain" {
   count = contains(var.target_clouds, "aws") && contains(var.target_clouds, "azure") && var.domain_name != "" && var.deployment_mode == "static" ? 1 : 0
 
   zone_id = module.aws_static[0].route53_zone_id
-  name    = "azure.${var.domain_name}"
+  name    = "azure.${local.apex_domain}"
   type    = "CNAME"
   ttl     = 300
   # Azure Storage static website endpoint (extract domain from URL like https://account.z13.web.core.windows.net)
@@ -247,7 +257,7 @@ resource "aws_route53_record" "gcp_static_subdomain" {
   count = contains(var.target_clouds, "aws") && contains(var.target_clouds, "gcp") && var.domain_name != "" && var.deployment_mode == "static" ? 1 : 0
 
   zone_id = module.aws_static[0].route53_zone_id
-  name    = "gcp.${var.domain_name}"
+  name    = "gcp.${local.apex_domain}"
   type    = "CNAME"
   ttl     = 300
   # GCP Storage bucket website endpoint (extract domain from URL)
@@ -260,7 +270,7 @@ resource "aws_route53_record" "aws_static_subdomain" {
   count = contains(var.target_clouds, "aws") && var.domain_name != "" && var.deployment_mode == "static" ? 1 : 0
 
   zone_id = module.aws_static[0].route53_zone_id
-  name    = "aws.${var.domain_name}"
+  name    = "aws.${local.apex_domain}"
   type    = "A"
 
   alias {
