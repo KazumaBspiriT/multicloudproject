@@ -339,21 +339,47 @@ jobs:
             fi
           fi
 
-          # Static mode (AWS or GCP)
+          # Static mode: Extract URLs for each cloud separately
           if [ "$MODE" = "static" ]; then
-            WEBSITE_URL="$(jget '.website_endpoint.value')"
-            if [ -n "$WEBSITE_URL" ]; then
-              echo "WEBSITE_URL=$WEBSITE_URL" >> "$GITHUB_ENV"
-              echo "website_url=$WEBSITE_URL" >> "$GITHUB_OUTPUT"
+            if [[ "$CLOUD" == *"aws"* ]]; then
+              AWS_STATIC_URL="$(jget '.aws_static_cloudfront_url.value // empty')"
+              if [ -n "$AWS_STATIC_URL" ] && [ "$AWS_STATIC_URL" != "null" ]; then
+                echo "AWS_STATIC_URL=$AWS_STATIC_URL" >> "$GITHUB_ENV"
+              fi
+            fi
+            if [[ "$CLOUD" == *"gcp"* ]]; then
+              GCP_STATIC_URL="$(jget '.gcp_static_website_url.value // empty')"
+              if [ -n "$GCP_STATIC_URL" ] && [ "$GCP_STATIC_URL" != "null" ]; then
+                echo "GCP_STATIC_URL=$GCP_STATIC_URL" >> "$GITHUB_ENV"
+              fi
+            fi
+            if [[ "$CLOUD" == *"azure"* ]]; then
+              AZURE_STATIC_URL="$(jget '.azure_static_website_url.value // empty')"
+              if [ -n "$AZURE_STATIC_URL" ] && [ "$AZURE_STATIC_URL" != "null" ]; then
+                echo "AZURE_STATIC_URL=$AZURE_STATIC_URL" >> "$GITHUB_ENV"
+              fi
             fi
           fi
 
-          # Container mode
+          # Container mode: Extract URLs for each cloud separately
           if [ "$MODE" = "container" ]; then
-            CONTAINER_URL="$(jget '.container_url.value')"
-            if [ -n "$CONTAINER_URL" ]; then
-              echo "CONTAINER_URL=$CONTAINER_URL" >> "$GITHUB_ENV"
-              echo "container_url=$CONTAINER_URL" >> "$GITHUB_OUTPUT"
+            if [[ "$CLOUD" == *"aws"* ]]; then
+              AWS_CONTAINER_URL="$(jget '.aws_container_service_url.value // empty')"
+              if [ -n "$AWS_CONTAINER_URL" ] && [ "$AWS_CONTAINER_URL" != "null" ]; then
+                echo "AWS_CONTAINER_URL=$AWS_CONTAINER_URL" >> "$GITHUB_ENV"
+              fi
+            fi
+            if [[ "$CLOUD" == *"gcp"* ]]; then
+              GCP_CONTAINER_URL="$(jget '.gcp_container_service_url.value // empty')"
+              if [ -n "$GCP_CONTAINER_URL" ] && [ "$GCP_CONTAINER_URL" != "null" ]; then
+                echo "GCP_CONTAINER_URL=$GCP_CONTAINER_URL" >> "$GITHUB_ENV"
+              fi
+            fi
+            if [[ "$CLOUD" == *"azure"* ]]; then
+              AZURE_CONTAINER_URL="$(jget '.azure_container_service_url.value // empty')"
+              if [ -n "$AZURE_CONTAINER_URL" ] && [ "$AZURE_CONTAINER_URL" != "null" ]; then
+                echo "AZURE_CONTAINER_URL=$AZURE_CONTAINER_URL" >> "$GITHUB_ENV"
+              fi
             fi
           fi
 
@@ -610,9 +636,11 @@ jobs:
             echo "⚠️  Hosted zone not found for $APEX_DOMAIN"
           fi
 
-      # Simple smoke log (you can curl a URL here if you output one for k8s)
-      - name: Smoke Log
+      # Display all deployment URLs
+      - name: Display Deployment URLs
         if: ${{ inputs.action == 'deploy' && success() }}
+        env:
+          KUBECONFIG: kubeconfig.yaml
         run: |
           echo ""
           echo "=========================================="
@@ -620,27 +648,96 @@ jobs:
           echo "=========================================="
           echo "Cloud: ${{ inputs.target_cloud }}"
           echo "Mode:  ${{ inputs.deployment_mode }}"
-          if [ -n "${{ env.WEBSITE_URL }}" ]; then
-            echo "Static site endpoint: ${{ env.WEBSITE_URL }}"
-          fi
-          if [ -n "${{ env.CONTAINER_URL }}" ]; then
-            echo "Container URL: ${{ env.CONTAINER_URL }}"
-          fi
-          if [ -n "${{ env.CLUSTER_ENDPOINT }}" ]; then
-            echo "Kubernetes API endpoint: ${{ env.CLUSTER_ENDPOINT }}"
-          fi
-          if [[ -n "${{ inputs.domain_name }}" ]]; then
-            echo "Custom domain: ${{ inputs.domain_name }}"
-            if [[ "${{ inputs.target_cloud }}" == *"aws"* ]]; then
-              echo "  - AWS: https://aws.${{ inputs.domain_name }}"
+          echo ""
+          
+          # K8s Mode URLs
+          if [ "${{ inputs.deployment_mode }}" = "k8s" ]; then
+            echo "📦 Kubernetes Clusters:"
+            if [[ "${{ inputs.target_cloud }}" == *"aws"* ]] && [ -n "${{ env.CLUSTER_ENDPOINT }}" ]; then
+              echo "  - AWS EKS API: ${{ env.CLUSTER_ENDPOINT }}"
+              if [[ -n "${{ inputs.domain_name }}" ]]; then
+                echo "  - AWS Application: https://${{ inputs.domain_name }} (ALB with custom domain)"
+              else
+                # Try to get LoadBalancer URL from kubectl
+                if [ -f kubeconfig.yaml ]; then
+                  export KUBECONFIG=kubeconfig.yaml
+                  LB_URL=$(kubectl get svc -n sample-app portfolio-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || kubectl get svc -n sample-app portfolio-service -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+                  if [ -n "$LB_URL" ]; then
+                    echo "  - AWS Application: http://$LB_URL (LoadBalancer)"
+                  fi
+                fi
+              fi
+            fi
+            if [[ "${{ inputs.target_cloud }}" == *"gcp"* ]] && [ -n "${{ env.CLUSTER_ENDPOINT }}" ]; then
+              echo "  - GCP GKE API: ${{ env.CLUSTER_ENDPOINT }}"
+              # Try to get LoadBalancer URL from kubectl
+              if [ -f kubeconfig.yaml ]; then
+                export KUBECONFIG=kubeconfig.yaml
+                LB_URL=$(kubectl get svc -n sample-app portfolio-service -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+                if [ -n "$LB_URL" ]; then
+                  echo "  - GCP Application: http://$LB_URL (LoadBalancer)"
+                fi
+              fi
             fi
             if [[ "${{ inputs.target_cloud }}" == *"azure"* ]]; then
-              echo "  - Azure: http://azure.${{ inputs.domain_name }}"
-            fi
-            if [[ "${{ inputs.target_cloud }}" == *"gcp"* ]]; then
-              echo "  - GCP: https://gcp.${{ inputs.domain_name }}"
+              # Try to get LoadBalancer URL from kubectl
+              if [ -f kubeconfig.yaml ]; then
+                export KUBECONFIG=kubeconfig.yaml
+                LB_URL=$(kubectl get svc -n sample-app portfolio-service -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+                if [ -n "$LB_URL" ]; then
+                  echo "  - Azure AKS Application: http://$LB_URL (LoadBalancer)"
+                fi
+              fi
             fi
           fi
+          
+          # Container Mode URLs
+          if [ "${{ inputs.deployment_mode }}" = "container" ]; then
+            echo "🐳 Container Services:"
+            if [[ "${{ inputs.target_cloud }}" == *"aws"* ]] && [ -n "${{ env.AWS_CONTAINER_URL }}" ]; then
+              echo "  - AWS App Runner: ${{ env.AWS_CONTAINER_URL }}"
+              if [[ -n "${{ inputs.domain_name }}" ]]; then
+                echo "    Custom Domain: https://aws.${{ inputs.domain_name }}"
+              fi
+            fi
+            if [[ "${{ inputs.target_cloud }}" == *"gcp"* ]] && [ -n "${{ env.GCP_CONTAINER_URL }}" ]; then
+              echo "  - GCP Cloud Run: ${{ env.GCP_CONTAINER_URL }}"
+              if [[ -n "${{ inputs.domain_name }}" ]]; then
+                echo "    Custom Domain: https://gcp.${{ inputs.domain_name }}"
+              fi
+            fi
+            if [[ "${{ inputs.target_cloud }}" == *"azure"* ]] && [ -n "${{ env.AZURE_CONTAINER_URL }}" ]; then
+              echo "  - Azure Container Instance: ${{ env.AZURE_CONTAINER_URL }}"
+              if [[ -n "${{ inputs.domain_name }}" ]]; then
+                echo "    Custom Domain: http://azure.${{ inputs.domain_name }}"
+              fi
+            fi
+          fi
+          
+          # Static Mode URLs
+          if [ "${{ inputs.deployment_mode }}" = "static" ]; then
+            echo "📄 Static Websites:"
+            if [[ "${{ inputs.target_cloud }}" == *"aws"* ]] && [ -n "${{ env.AWS_STATIC_URL }}" ]; then
+              echo "  - AWS CloudFront: ${{ env.AWS_STATIC_URL }}"
+              if [[ -n "${{ inputs.domain_name }}" ]]; then
+                echo "    Custom Domain: https://aws.${{ inputs.domain_name }}"
+              fi
+            fi
+            if [[ "${{ inputs.target_cloud }}" == *"gcp"* ]] && [ -n "${{ env.GCP_STATIC_URL }}" ]; then
+              echo "  - GCP Storage: ${{ env.GCP_STATIC_URL }}"
+              if [[ -n "${{ inputs.domain_name }}" ]]; then
+                echo "    Custom Domain: https://gcp.${{ inputs.domain_name }}"
+              fi
+            fi
+            if [[ "${{ inputs.target_cloud }}" == *"azure"* ]] && [ -n "${{ env.AZURE_STATIC_URL }}" ]; then
+              echo "  - Azure Storage: ${{ env.AZURE_STATIC_URL }}"
+              if [[ -n "${{ inputs.domain_name }}" ]]; then
+                echo "    Custom Domain: http://azure.${{ inputs.domain_name }}"
+              fi
+            fi
+          fi
+          
+          echo ""
 
       # ==========================================
       # DESTROY WORKFLOW

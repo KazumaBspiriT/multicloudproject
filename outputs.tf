@@ -112,3 +112,34 @@ output "eks_lb_role_arn" {
   description = "IAM Role ARN for the AWS Load Balancer Controller in EKS"
   value       = local.eks_enabled ? try(module.eks[0].lb_role_arn, null) : null
 }
+
+# Individual cloud URLs for better visibility
+output "aws_container_service_url" {
+  description = "AWS App Runner service URL"
+  value       = var.deployment_mode == "container" && contains(var.target_clouds, "aws") && length(module.aws_container) > 0 ? module.aws_container[0].service_url : null
+}
+
+output "gcp_container_service_url" {
+  description = "GCP Cloud Run service URL"
+  value       = var.deployment_mode == "container" && contains(var.target_clouds, "gcp") && length(module.gcp_container) > 0 ? module.gcp_container[0].service_url : null
+}
+
+output "azure_container_service_url" {
+  description = "Azure Container Instance service URL"
+  value       = var.deployment_mode == "container" && contains(var.target_clouds, "azure") && length(module.azure_container) > 0 ? module.azure_container[0].service_url : null
+}
+
+output "aws_static_cloudfront_url" {
+  description = "AWS CloudFront distribution URL"
+  value       = var.deployment_mode == "static" && contains(var.target_clouds, "aws") && length(module.aws_static) > 0 ? try(module.aws_static[0].cloudfront_url, null) : null
+}
+
+output "gcp_static_website_url" {
+  description = "GCP Storage bucket website URL"
+  value       = var.deployment_mode == "static" && contains(var.target_clouds, "gcp") && length(module.gcp_static) > 0 ? try(module.gcp_static[0].website_url, null) : null
+}
+
+output "azure_static_website_url" {
+  description = "Azure Storage account static website URL"
+  value       = var.deployment_mode == "static" && contains(var.target_clouds, "azure") && length(module.azure_static) > 0 ? try(module.azure_static[0].website_url, null) : null
+}
