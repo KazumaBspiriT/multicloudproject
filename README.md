@@ -144,6 +144,105 @@ Add all four values to GitHub Secrets.
 
 ## 🎯 Usage
 
+### Container Image Requirements
+
+#### Supported Image Formats
+
+**Input Format**: Docker Hub URI (e.g., `nginx:latest`, `sumanthreddy2324/multi-cloud-demo:latest`)
+
+The project accepts Docker Hub image URIs in the format:
+- `username/image:tag` (e.g., `sumanthreddy2324/multi-cloud-demo:latest`)
+- `image:tag` (official images, e.g., `nginx:latest`)
+- `username/image` (defaults to `:latest` tag)
+
+#### Automatic Image Mirroring
+
+**Why Mirroring?**
+- **AWS App Runner**: Requires images from ECR (Elastic Container Registry) or ECR Public
+- **Azure Container Instances**: Docker Hub has rate limits that can cause deployment failures
+- **GCP Cloud Run**: Supports Docker Hub directly, no mirroring needed
+
+**How It Works:**
+
+1. **AWS (App Runner)**:
+   - Creates a private ECR repository automatically
+   - Pulls your Docker Hub image locally
+   - Tags and pushes it to the private ECR repository
+   - App Runner uses the ECR image (faster, more reliable)
+   - **No action required** - happens automatically during deployment
+
+2. **Azure (Container Instances)**:
+   - Creates an Azure Container Registry (ACR) automatically
+   - Pulls your Docker Hub image locally
+   - Tags and pushes it to ACR
+   - Container Instances use the ACR image (avoids Docker Hub rate limits)
+   - **No action required** - happens automatically during deployment
+
+3. **GCP (Cloud Run)**:
+   - Uses Docker Hub images directly
+   - **No mirroring needed** - Cloud Run supports Docker Hub natively
+
+#### Image Requirements
+
+**What You Need:**
+- A Docker image published to Docker Hub (public or private)
+- Image must be accessible (public images work best)
+- Image should expose port 80 (or configure your app to use port 80)
+
+**Example Images:**
+```bash
+# Official images
+nginx:latest
+node:18-alpine
+python:3.11
+
+# Custom images
+sumanthreddy2324/multi-cloud-demo:latest
+yourusername/your-app:v1.0.0
+```
+
+**Building and Pushing Your Own Image:**
+
+1. **Build your Docker image:**
+   ```bash
+   docker build -t yourusername/your-app:latest .
+   ```
+
+2. **Push to Docker Hub:**
+   ```bash
+   docker login
+   docker push yourusername/your-app:latest
+   ```
+
+3. **Use in deployment:**
+   ```bash
+   ./deploy.sh --image yourusername/your-app:latest
+   ```
+
+**Note**: The `build-and-push.sh` script in the project root can help you build and push custom images.
+
+#### Image Mirroring Process
+
+**During Deployment:**
+1. Terraform creates ECR/ACR repositories (if needed)
+2. `null_resource` provisioner runs locally:
+   - Authenticates to ECR/ACR
+   - Pulls image from Docker Hub
+   - Tags image for ECR/ACR
+   - Pushes to private registry
+3. Container service uses the mirrored image
+
+**Requirements for Mirroring:**
+- Docker must be installed and running locally
+- Docker must have access to pull from Docker Hub
+- AWS CLI authenticated (for ECR)
+- Azure CLI authenticated (for ACR)
+
+**Troubleshooting:**
+- If mirroring fails, check Docker is running: `docker ps`
+- For private Docker Hub images, ensure you're logged in: `docker login`
+- Check AWS/Azure credentials are configured correctly
+
 ### Local Deployment
 
 #### Static Content Preparation (for Static Mode)
@@ -195,12 +294,6 @@ The script will:
   --mode container \
   --image sumanthreddy2324/multi-cloud-demo:latest \
   --domain sumanthdev2324.com
-
-# Destroy resources
-./deploy.sh \
-  --action destroy \
-  --clouds aws,gcp,azure \
-  --mode container
 ```
 
 **Available Flags:**
@@ -210,6 +303,91 @@ The script will:
 - `-i, --image`: Docker Hub image URI (e.g., `nginx:latest`)
 - `-d, --domain`: Custom domain name (e.g., `example.com`)
 - `-h, --help`: Show help message
+
+### Destroying Resources
+
+#### Local Destroy
+
+**Important**: Always destroy resources when not in use to avoid unnecessary costs.
+
+**Interactive Mode:**
+```bash
+./deploy.sh
+# Select: destroy
+# Choose the same clouds and mode you used for deployment
+# Provide the same domain name if you used one during deployment
+```
+
+**Non-Interactive Mode (CLI Flags):**
+```bash
+# Destroy container resources from all clouds
+./deploy.sh \
+  --action destroy \
+  --clouds aws,gcp,azure \
+  --mode container \
+  --domain sumanthdev2324.com
+
+# Destroy Kubernetes resources from AWS
+./deploy.sh \
+  --action destroy \
+  --clouds aws \
+  --mode k8s \
+  --domain example.com
+
+# Destroy static website from all clouds
+./deploy.sh \
+  --action destroy \
+  --clouds aws,gcp,azure \
+  --mode static \
+  --domain example.com
+```
+
+**Important Notes for Destroy:**
+1. **Domain Name**: If you provided a domain during deployment, you **must** provide the same domain during destroy (for Route 53 cleanup)
+2. **Deployment Mode**: Use the same mode you used for deployment (or use `all` to destroy all modes)
+3. **Clouds**: Use the same clouds you deployed to (or a subset)
+4. **Automatic Cleanup**: The script automatically:
+   - Deletes Kubernetes Ingress (to free ALB and certificates)
+   - Deletes Route 53 DNS records (before hosted zone deletion)
+   - Cleans up VPC dependencies (NAT Gateways, Internet Gateways, etc.)
+   - Removes orphaned resources
+5. **State Lock**: If destroy fails due to a state lock, wait a few minutes and try again, or manually unlock if needed
+
+**Destroy Process:**
+1. Pre-destroy cleanup (Kubernetes Ingress, Route 53 records)
+2. Terraform destroy (removes all infrastructure)
+3. Post-destroy cleanup (any remaining Route 53 records)
+4. Orphaned resource check (NAT Gateways, VPCs)
+
+#### Pipeline Destroy
+
+**Using GitHub Actions:**
+
+1. Go to **Actions** → **Multi-Cloud Deployment Pipeline** → **Run workflow**
+2. Fill in the inputs:
+   - **Action**: `destroy`
+   - **Target Cloud**: Same as deployment (e.g., `aws,gcp,azure`)
+   - **Deployment Mode**: Same as deployment (or `all` to destroy all modes)
+   - **Custom Domain**: **Required** if you used a domain during deployment
+   - **Enable NAT Gateway**: Same as deployment (usually `false`)
+3. Click **Run workflow**
+
+**Example Pipeline Destroy:**
+```yaml
+Action: destroy
+Target Cloud: aws,gcp,azure
+Deployment Mode: container
+Custom Domain: sumanthdev2324.com
+Enable NAT Gateway: false
+```
+
+**Pipeline Destroy Process:**
+- Validates secrets (same as deploy)
+- Pre-destroy cleanup (Ingress, Route 53 records)
+- Terraform destroy
+- Post-destroy cleanup (remaining Route 53 records)
+
+**⚠️ Warning**: Destroy is **irreversible**. All resources will be permanently deleted. Make sure you have backups if needed.
 
 ### GitHub Actions Pipeline
 
@@ -362,7 +540,7 @@ This allows you to access the same application deployed across all three clouds 
 - **AWS**: App Runner (serverless container service)
 - **GCP**: Cloud Run (serverless container service)
 - **Azure**: Container Instances (ACI)
-- **Image Mirroring**: Auto-mirrors Docker Hub images to ECR/ACR
+- **Image Mirroring**: Auto-mirrors Docker Hub images to ECR/ACR (see [Container Image Requirements](#-container-image-requirements) below)
 
 #### Static
 - **AWS**: S3 + CloudFront (CDN)
@@ -504,4 +682,8 @@ For issues or questions:
 ---
 
 **Note**: Always test in a non-production environment first. Destroy resources when not in use to avoid unnecessary costs.
+
+### Destroy Resources
+
+See the [Destroying Resources](#destroying-resources) section above for detailed instructions on how to destroy resources both locally and via pipeline.
 
