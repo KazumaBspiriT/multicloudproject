@@ -473,10 +473,10 @@ jobs:
             export KUBECONFIG="$KUBECONFIG_PATH"
             
             echo "Fetching GKE credentials..."
+            # gcloud doesn't support --kubeconfig flag, so we set KUBECONFIG env var
             gcloud container clusters get-credentials "${{ env.GKE_NAME }}" \
               --region "us-central1" \
-              --project "$GCP_PROJECT" \
-              --kubeconfig="$KUBECONFIG_PATH"
+              --project "$GCP_PROJECT"
             
             # Verify kubeconfig is valid and has proper authentication
             chmod 600 "$KUBECONFIG_PATH"
