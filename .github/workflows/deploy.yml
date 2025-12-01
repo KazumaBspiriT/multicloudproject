@@ -468,28 +468,66 @@ jobs:
             
             echo "Using GCP Project: $GCP_PROJECT"
             
+            # Install gke-gcloud-auth-plugin if not present (required for GKE kubectl authentication)
+            if ! command -v gke-gcloud-auth-plugin &> /dev/null; then
+              echo "Installing gke-gcloud-auth-plugin..."
+              gcloud components install gke-gcloud-auth-plugin --quiet || true
+            fi
+            
             # Get credentials and write directly to kubeconfig.yaml using absolute path
             KUBECONFIG_PATH="${{ github.workspace }}/kubeconfig.yaml"
-            export KUBECONFIG="$KUBECONFIG_PATH"
             
-            echo "Fetching GKE credentials..."
-            # gcloud doesn't support --kubeconfig flag, so we set KUBECONFIG env var
-            gcloud container clusters get-credentials "${{ env.GKE_NAME }}" \
-              --region "us-central1" \
-              --project "$GCP_PROJECT"
+            # If kubeconfig exists and contains EKS entries (multi-cloud deployment), 
+            # use a separate file for GKE to avoid conflicts
+            if [ -f "$KUBECONFIG_PATH" ] && grep -q "eks.amazonaws.com" "$KUBECONFIG_PATH" 2>/dev/null; then
+              echo "⚠️  Kubeconfig exists with EKS entries. Using separate file for GKE..."
+              GKE_KUBECONFIG="${{ github.workspace }}/kubeconfig-gke.yaml"
+              
+              # Fetch GKE credentials to separate file
+              export KUBECONFIG="$GKE_KUBECONFIG"
+              echo "Fetching GKE credentials to separate file..."
+              gcloud container clusters get-credentials "${{ env.GKE_NAME }}" \
+                --region "us-central1" \
+                --project "$GCP_PROJECT"
+              
+              # Use both kubeconfigs via KUBECONFIG env var (kubectl will merge them automatically)
+              export KUBECONFIG="$KUBECONFIG_PATH:$GKE_KUBECONFIG"
+              echo "✅ GKE kubeconfig configured (using multi-file kubeconfig)"
+            else
+              # Single cloud or no existing kubeconfig - use directly
+              export KUBECONFIG="$KUBECONFIG_PATH"
+              
+              echo "Fetching GKE credentials..."
+              # gcloud doesn't support --kubeconfig flag, so we set KUBECONFIG env var
+              gcloud container clusters get-credentials "${{ env.GKE_NAME }}" \
+                --region "us-central1" \
+                --project "$GCP_PROJECT"
+            fi
             
             # Verify kubeconfig is valid and has proper authentication
-            chmod 600 "$KUBECONFIG_PATH"
+            if [ -f "$KUBECONFIG_PATH" ]; then
+              chmod 600 "$KUBECONFIG_PATH"
+            fi
+            if [ -n "${GKE_KUBECONFIG:-}" ] && [ -f "$GKE_KUBECONFIG" ]; then
+              chmod 600 "$GKE_KUBECONFIG"
+            fi
+            
             echo "Verifying kubeconfig authentication..."
             
-            # Test cluster access
-            if kubectl --kubeconfig="$KUBECONFIG_PATH" cluster-info &>/dev/null; then
+            # Test cluster access (use KUBECONFIG env var which handles multi-file automatically)
+            if kubectl cluster-info &>/dev/null; then
               echo "✅ GKE kubeconfig configured and authenticated"
-              kubectl --kubeconfig="$KUBECONFIG_PATH" get nodes || echo "⚠️  Warning: Could not list nodes (cluster may still be provisioning)"
+              # Try to get GKE nodes specifically
+              kubectl get nodes --context="gke_${GCP_PROJECT}_us-central1_${{ env.GKE_NAME }}" 2>/dev/null || \
+              kubectl get nodes 2>/dev/null || echo "⚠️  Warning: Could not list nodes (cluster may still be provisioning)"
             else
               echo "❌ Error: Failed to authenticate with GKE cluster"
               echo "Checking kubeconfig contents..."
-              cat "$KUBECONFIG_PATH" | head -20
+              if [ -n "${GKE_KUBECONFIG:-}" ] && [ -f "$GKE_KUBECONFIG" ]; then
+                cat "$GKE_KUBECONFIG" | head -30
+              else
+                cat "$KUBECONFIG_PATH" | head -30
+              fi
               exit 1
             fi
           else
@@ -498,8 +536,6 @@ jobs:
 
       - name: Run Ansible for GKE (GCP - LoadBalancer only, no domain)
         if: ${{ inputs.action == 'deploy' && contains(inputs.target_cloud, 'gcp') && inputs.deployment_mode == 'k8s' }}
-        env:
-          KUBECONFIG: ${{ github.workspace }}/kubeconfig.yaml
         run: |
           if [ ! -f ansible/inventory.yml ] || [ ! -f ansible/playbook.yml ]; then
             echo "Ansible files not present, skipping."
@@ -507,6 +543,15 @@ jobs:
           fi
           
           KUBECONFIG_PATH="${{ github.workspace }}/kubeconfig.yaml"
+          GKE_KUBECONFIG="${{ github.workspace }}/kubeconfig-gke.yaml"
+          
+          # Set KUBECONFIG to include both files if GKE kubeconfig exists (multi-cloud)
+          if [ -f "$GKE_KUBECONFIG" ]; then
+            export KUBECONFIG="$KUBECONFIG_PATH:$GKE_KUBECONFIG"
+            echo "Using multi-file kubeconfig: $KUBECONFIG"
+          else
+            export KUBECONFIG="$KUBECONFIG_PATH"
+          fi
           
           # Verify kubeconfig exists and is accessible
           if [ ! -f "$KUBECONFIG_PATH" ]; then
@@ -516,11 +561,11 @@ jobs:
           
           # Test kubectl access before running Ansible
           echo "Testing kubectl access to GKE cluster..."
-          if ! kubectl --kubeconfig="$KUBECONFIG_PATH" cluster-info &>/dev/null; then
+          if ! kubectl cluster-info &>/dev/null; then
             echo "❌ Error: Cannot access GKE cluster. Authentication failed."
             echo "Current gcloud auth:"
             gcloud auth list
-            echo "Kubeconfig location: $KUBECONFIG_PATH"
+            echo "Kubeconfig: $KUBECONFIG"
             exit 1
           fi
           
@@ -540,22 +585,98 @@ jobs:
           AKS_RG=$(terraform output -raw aks_resource_group_name 2>/dev/null || echo "")
           
           if [[ -n "$AKS_NAME" ]] && [[ -n "$AKS_RG" ]]; then
-            az aks get-credentials --resource-group "$AKS_RG" --name "$AKS_NAME" --file ./kubeconfig.yaml --overwrite-existing
-            chmod 600 ./kubeconfig.yaml
-            echo "✅ AKS kubeconfig configured"
+            KUBECONFIG_PATH="${{ github.workspace }}/kubeconfig.yaml"
+            
+            # If kubeconfig exists and contains other cloud entries (multi-cloud deployment), 
+            # use a separate file for AKS to avoid conflicts
+            if [ -f "$KUBECONFIG_PATH" ] && (grep -q "eks.amazonaws.com" "$KUBECONFIG_PATH" 2>/dev/null || grep -q "gke" "$KUBECONFIG_PATH" 2>/dev/null); then
+              echo "⚠️  Kubeconfig exists with other cloud entries. Using separate file for AKS..."
+              AKS_KUBECONFIG="${{ github.workspace }}/kubeconfig-aks.yaml"
+              
+              # Fetch AKS credentials to separate file
+              az aks get-credentials --resource-group "$AKS_RG" --name "$AKS_NAME" --file "$AKS_KUBECONFIG" --overwrite-existing
+              chmod 600 "$AKS_KUBECONFIG"
+              
+              # Use both kubeconfigs via KUBECONFIG env var (kubectl will merge them automatically)
+              export KUBECONFIG="$KUBECONFIG_PATH:$AKS_KUBECONFIG"
+              echo "✅ AKS kubeconfig configured (using multi-file kubeconfig)"
+            else
+              # Single cloud or no existing kubeconfig - use directly
+              az aks get-credentials --resource-group "$AKS_RG" --name "$AKS_NAME" --file "$KUBECONFIG_PATH" --overwrite-existing
+              chmod 600 "$KUBECONFIG_PATH"
+              export KUBECONFIG="$KUBECONFIG_PATH"
+              echo "✅ AKS kubeconfig configured"
+            fi
+            
+            # Verify kubeconfig is valid and has proper authentication
+            if [ -f "$KUBECONFIG_PATH" ]; then
+              chmod 600 "$KUBECONFIG_PATH"
+            fi
+            if [ -n "${AKS_KUBECONFIG:-}" ] && [ -f "$AKS_KUBECONFIG" ]; then
+              chmod 600 "$AKS_KUBECONFIG"
+            fi
+            
+            echo "Verifying kubeconfig authentication..."
+            
+            # Test cluster access (use KUBECONFIG env var which handles multi-file automatically)
+            if kubectl cluster-info &>/dev/null; then
+              echo "✅ AKS kubeconfig configured and authenticated"
+              # Try to get AKS nodes specifically
+              kubectl get nodes --context="$(kubectl config get-contexts -o name | grep -i aks | head -1)" 2>/dev/null || \
+              kubectl get nodes 2>/dev/null || echo "⚠️  Warning: Could not list nodes (cluster may still be provisioning)"
+            else
+              echo "❌ Error: Failed to authenticate with AKS cluster"
+              echo "Checking kubeconfig contents..."
+              if [ -n "${AKS_KUBECONFIG:-}" ] && [ -f "$AKS_KUBECONFIG" ]; then
+                cat "$AKS_KUBECONFIG" | head -30
+              else
+                cat "$KUBECONFIG_PATH" | head -30
+              fi
+              exit 1
+            fi
           else
             echo "⚠️  AKS cluster name or resource group not found in outputs"
           fi
 
       - name: Run Ansible for AKS (Azure - LoadBalancer only, no domain)
         if: ${{ inputs.action == 'deploy' && contains(inputs.target_cloud, 'azure') && inputs.deployment_mode == 'k8s' }}
-        env:
-          KUBECONFIG: ${{ github.workspace }}/kubeconfig.yaml
         run: |
           if [ ! -f ansible/inventory.yml ] || [ ! -f ansible/playbook.yml ]; then
             echo "Ansible files not present, skipping."
             exit 0
           fi
+          
+          KUBECONFIG_PATH="${{ github.workspace }}/kubeconfig.yaml"
+          AKS_KUBECONFIG="${{ github.workspace }}/kubeconfig-aks.yaml"
+          GKE_KUBECONFIG="${{ github.workspace }}/kubeconfig-gke.yaml"
+          
+          # Set KUBECONFIG to include all relevant files if they exist (multi-cloud)
+          KUBECONFIG_VAR="$KUBECONFIG_PATH"
+          if [ -f "$GKE_KUBECONFIG" ]; then
+            KUBECONFIG_VAR="$KUBECONFIG_VAR:$GKE_KUBECONFIG"
+          fi
+          if [ -f "$AKS_KUBECONFIG" ]; then
+            KUBECONFIG_VAR="$KUBECONFIG_VAR:$AKS_KUBECONFIG"
+          fi
+          export KUBECONFIG="$KUBECONFIG_VAR"
+          
+          # Verify kubeconfig exists and is accessible
+          if [ ! -f "$KUBECONFIG_PATH" ] && [ ! -f "$AKS_KUBECONFIG" ]; then
+            echo "❌ Error: kubeconfig files not found!"
+            exit 1
+          fi
+          
+          # Test kubectl access before running Ansible
+          echo "Testing kubectl access to AKS cluster..."
+          if ! kubectl cluster-info &>/dev/null; then
+            echo "❌ Error: Cannot access AKS cluster. Authentication failed."
+            echo "Current az account:"
+            az account show || true
+            echo "Kubeconfig: $KUBECONFIG"
+            exit 1
+          fi
+          
+          echo "✅ kubectl access verified"
           
           # For Azure, no domain, no AWS vars - just LoadBalancer service (no ALB, no Ingress)
           EXTRA_VARS="deployment_mode=${{ inputs.deployment_mode }} app_image=${{ inputs.app_image }} domain_name= target_clouds=azure"
@@ -806,19 +927,78 @@ jobs:
       # DESTROY WORKFLOW
       # ==========================================
       
-      # Pre-destroy cleanup: Delete Kubernetes Ingress
-      - name: Pre-Destroy Cleanup (Kubernetes Ingress)
+      # Pre-destroy cleanup: Delete Kubernetes resources (Ingress and LoadBalancer Services)
+      - name: Pre-Destroy Cleanup (Kubernetes Resources)
         if: ${{ inputs.action == 'destroy' && inputs.deployment_mode == 'k8s' }}
         run: |
-          if [ -f "./kubeconfig.yaml" ]; then
-            export KUBECONFIG="${{ github.workspace }}/kubeconfig.yaml"
-            if kubectl get ingress -n sample-app portfolio-ingress &> /dev/null; then
-              echo "Deleting Ingress to free up ALB and Certificates..."
-              kubectl delete ingress -n sample-app portfolio-ingress --ignore-not-found=true --timeout=60s || true
-              echo "Waiting for ALB cleanup..."
-              sleep 15
-            fi
+          KUBECONFIG_PATH="${{ github.workspace }}/kubeconfig.yaml"
+          GKE_KUBECONFIG="${{ github.workspace }}/kubeconfig-gke.yaml"
+          AKS_KUBECONFIG="${{ github.workspace }}/kubeconfig-aks.yaml"
+          
+          # Set KUBECONFIG to include all relevant files if they exist (multi-cloud)
+          KUBECONFIG_VAR="$KUBECONFIG_PATH"
+          if [ -f "$GKE_KUBECONFIG" ]; then
+            KUBECONFIG_VAR="$KUBECONFIG_VAR:$GKE_KUBECONFIG"
           fi
+          if [ -f "$AKS_KUBECONFIG" ]; then
+            KUBECONFIG_VAR="$KUBECONFIG_VAR:$AKS_KUBECONFIG"
+          fi
+          
+          if [ -f "$KUBECONFIG_PATH" ] || [ -f "$GKE_KUBECONFIG" ] || [ -f "$AKS_KUBECONFIG" ]; then
+            export KUBECONFIG="$KUBECONFIG_VAR"
+            echo "Using multi-file kubeconfig for cleanup: $KUBECONFIG"
+          else
+            echo "⚠️  No kubeconfig found, skipping Kubernetes cleanup"
+            exit 0
+          fi
+          
+          # Delete Ingress (AWS ALB) - try all contexts
+          echo "Attempting to delete Ingress (AWS ALB)..."
+          for context in $(kubectl config get-contexts -o name 2>/dev/null || echo ""); do
+            if kubectl --context="$context" get ingress -n sample-app portfolio-ingress &> /dev/null; then
+              echo "Deleting Ingress from context: $context"
+              kubectl --context="$context" delete ingress -n sample-app portfolio-ingress --ignore-not-found=true --timeout=60s || true
+            fi
+          done
+          # Also try without context (default)
+          if kubectl get ingress -n sample-app portfolio-ingress &> /dev/null 2>&1; then
+            echo "Deleting Ingress (default context)..."
+            kubectl delete ingress -n sample-app portfolio-ingress --ignore-not-found=true --timeout=60s || true
+          fi
+          echo "Waiting for ALB cleanup..."
+          sleep 15
+          
+          # Delete LoadBalancer Service (GCP GKE and Azure AKS) - try all contexts
+          echo "Attempting to delete LoadBalancer Service..."
+          for context in $(kubectl config get-contexts -o name 2>/dev/null || echo ""); do
+            if kubectl --context="$context" get svc -n sample-app portfolio-service &> /dev/null; then
+              echo "Deleting LoadBalancer Service from context: $context"
+              kubectl --context="$context" delete svc -n sample-app portfolio-service --ignore-not-found=true --timeout=60s || true
+            fi
+          done
+          # Also try without context (default)
+          if kubectl get svc -n sample-app portfolio-service &> /dev/null 2>&1; then
+            echo "Deleting LoadBalancer Service (default context)..."
+            kubectl delete svc -n sample-app portfolio-service --ignore-not-found=true --timeout=60s || true
+          fi
+          echo "Waiting for LoadBalancer cleanup..."
+          sleep 20
+          
+          # Delete namespace and all resources within it - try all contexts
+          echo "Attempting to delete namespace..."
+          for context in $(kubectl config get-contexts -o name 2>/dev/null || echo ""); do
+            if kubectl --context="$context" get namespace sample-app &> /dev/null; then
+              echo "Deleting namespace from context: $context"
+              kubectl --context="$context" delete namespace sample-app --ignore-not-found=true --timeout=120s || true
+            fi
+          done
+          # Also try without context (default)
+          if kubectl get namespace sample-app &> /dev/null 2>&1; then
+            echo "Deleting namespace (default context)..."
+            kubectl delete namespace sample-app --ignore-not-found=true --timeout=120s || true
+          fi
+          echo "Waiting for namespace cleanup..."
+          sleep 10
 
       # Pre-destroy cleanup: Delete Route 53 records
       - name: Pre-Destroy Cleanup (Route 53 Records)
