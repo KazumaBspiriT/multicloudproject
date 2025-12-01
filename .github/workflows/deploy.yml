@@ -912,48 +912,92 @@ jobs:
           
           # K8s Mode URLs
           if [ "${{ inputs.deployment_mode }}" = "k8s" ]; then
-            echo "📦 Kubernetes Clusters:"
-            if [[ "${{ inputs.target_cloud }}" == *"aws"* ]] && [ -n "${{ env.EKS_CLUSTER_ENDPOINT }}" ]; then
-              echo "  - AWS EKS API: ${{ env.EKS_CLUSTER_ENDPOINT }}"
+            echo "📦 Kubernetes Deployment URLs:"
+            echo ""
+            echo "⚠️  IMPORTANT: Use APPLICATION URLs below, NOT API endpoints!"
+            echo "   API endpoints require authentication and will return 401 Unauthorized."
+            echo ""
+            
+            if [[ "${{ inputs.target_cloud }}" == *"aws"* ]]; then
+              echo "🌐 AWS (EKS):"
+              if [ -n "${{ env.EKS_CLUSTER_ENDPOINT }}" ]; then
+                echo "  - Cluster API: ${{ env.EKS_CLUSTER_ENDPOINT }} (⚠️  Requires auth - don't use this!)"
+              fi
               if [[ -n "${{ inputs.domain_name }}" ]]; then
-                echo "  - AWS Application: https://${{ inputs.domain_name }} (ALB with custom domain)"
+                # Check for Ingress hostname
+                if [ -f kubeconfig.yaml ]; then
+                  export KUBECONFIG=${{ github.workspace }}/kubeconfig.yaml
+                  INGRESS_HOST=$(kubectl get ingress -n sample-app portfolio-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+                  if [ -n "$INGRESS_HOST" ]; then
+                    echo "  - ✅ Application URL: https://${{ inputs.domain_name }} (Custom Domain with SSL)"
+                    echo "     ALB Hostname: $INGRESS_HOST"
+                    echo "     Note: Ensure DNS is configured to point to the ALB hostname"
+                  else
+                    echo "  - ⏳ Ingress is still provisioning. Check with: kubectl get ingress -n sample-app"
+                  fi
+                fi
               else
                 # Try to get LoadBalancer URL from kubectl
                 if [ -f kubeconfig.yaml ]; then
                   export KUBECONFIG=${{ github.workspace }}/kubeconfig.yaml
                   LB_URL=$(kubectl get svc -n sample-app portfolio-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || kubectl get svc -n sample-app portfolio-service -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
                   if [ -n "$LB_URL" ]; then
-                    echo "  - AWS Application: http://$LB_URL (LoadBalancer)"
+                    echo "  - ✅ Application URL: http://$LB_URL (LoadBalancer - Use this!)"
+                  else
+                    echo "  - ⏳ LoadBalancer is still provisioning. Check with: kubectl get svc -n sample-app portfolio-service"
                   fi
                 fi
               fi
             fi
-            if [[ "${{ inputs.target_cloud }}" == *"gcp"* ]] && [ -n "${{ env.GKE_CLUSTER_ENDPOINT }}" ]; then
-              echo "  - GCP GKE API: ${{ env.GKE_CLUSTER_ENDPOINT }}"
+            
+            if [[ "${{ inputs.target_cloud }}" == *"gcp"* ]]; then
+              echo ""
+              echo "🌐 GCP (GKE):"
+              if [ -n "${{ env.GKE_CLUSTER_ENDPOINT }}" ]; then
+                echo "  - Cluster API: ${{ env.GKE_CLUSTER_ENDPOINT }} (⚠️  Requires auth - don't use this!)"
+              fi
               # Try to get LoadBalancer URL from kubectl
               if [ -f kubeconfig.yaml ]; then
                 export KUBECONFIG=${{ github.workspace }}/kubeconfig.yaml
                 LB_URL=$(kubectl get svc -n sample-app portfolio-service -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
                 if [ -n "$LB_URL" ]; then
-                  echo "  - GCP Application: http://$LB_URL (LoadBalancer)"
+                  echo "  - ✅ Application URL: http://$LB_URL (LoadBalancer - Use this!)"
+                else
+                  echo "  - ⏳ LoadBalancer is still provisioning. Check with: kubectl get svc -n sample-app portfolio-service"
                 fi
               fi
             fi
+            
             if [[ "${{ inputs.target_cloud }}" == *"azure"* ]]; then
+              echo ""
+              echo "🌐 Azure (AKS):"
               # Get AKS endpoint from terraform output
               AKS_ENDPOINT=$(terraform output -raw aks_cluster_endpoint 2>/dev/null || echo "")
               if [ -n "$AKS_ENDPOINT" ]; then
-                echo "  - Azure AKS API: $AKS_ENDPOINT"
+                echo "  - Cluster API: $AKS_ENDPOINT (⚠️  Requires auth - don't use this!)"
               fi
               # Try to get LoadBalancer URL from kubectl
-              if [ -f kubeconfig.yaml ]; then
+              if [ -f kubeconfig.yaml ] || [ -f kubeconfig-aks.yaml ]; then
                 export KUBECONFIG=${{ github.workspace }}/kubeconfig.yaml
+                if [ -f kubeconfig-aks.yaml ]; then
+                  export KUBECONFIG="${{ github.workspace }}/kubeconfig.yaml:${{ github.workspace }}/kubeconfig-aks.yaml"
+                fi
                 LB_URL=$(kubectl get svc -n sample-app portfolio-service -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
                 if [ -n "$LB_URL" ]; then
-                  echo "  - Azure AKS Application: http://$LB_URL (LoadBalancer)"
+                  echo "  - ✅ Application URL: http://$LB_URL (LoadBalancer - Use this!)"
+                else
+                  echo "  - ⏳ LoadBalancer is still provisioning. Check with: kubectl get svc -n sample-app portfolio-service"
                 fi
               fi
             fi
+            
+            echo ""
+            echo "=========================================="
+            echo "💡 Troubleshooting:"
+            echo "  - If you see '401 Unauthorized', you're accessing the Kubernetes API endpoint"
+            echo "  - Use the 'Application URL' above (LoadBalancer or Domain URL)"
+            echo "  - API endpoints are for cluster management only, not for accessing your app"
+            echo "=========================================="
           fi
           
           # Container Mode URLs
@@ -1554,32 +1598,112 @@ jobs:
           
           if [[ "${{ inputs.action }}" == "deploy" ]]; then
             echo ""
-            echo "⏱️  Deployment Timing:"
-            echo "----------------------------------------"
+            echo "⏱️  Deployment Timing Summary:"
+            echo "=========================================="
             
-            if [[ -n "${{ env.TERRAFORM_TIME }}" ]]; then
-              echo "  Terraform Infrastructure: ${{ env.TERRAFORM_TIME }}"
-            fi
+            # Function to parse time string (e.g., "1m 5s" or "0m 40s") to seconds
+            parse_time_to_seconds() {
+              local time_str="$1"
+              local minutes=$(echo "$time_str" | grep -oE '[0-9]+m' | grep -oE '[0-9]+' || echo "0")
+              local seconds=$(echo "$time_str" | grep -oE '[0-9]+s' | grep -oE '[0-9]+' || echo "0")
+              echo $((minutes * 60 + seconds))
+            }
+            
+            # Function to format seconds to "Xm Ys"
+            format_seconds() {
+              local total_sec=$1
+              local min=$((total_sec / 60))
+              local sec=$((total_sec % 60))
+              echo "${min}m ${sec}s"
+            }
+            
+            # Calculate total Ansible time
+            TOTAL_ANSIBLE_SEC=0
+            ANSIBLE_CLOUDS=()
             
             if [[ "${{ inputs.deployment_mode }}" == "k8s" ]]; then
               if [[ "${{ inputs.target_cloud }}" == *"aws"* ]] && [[ -n "${{ env.AWS_ANSIBLE_TIME }}" ]]; then
-                echo "  AWS (EKS) Ansible: ${{ env.AWS_ANSIBLE_TIME }}"
+                AWS_SEC=$(parse_time_to_seconds "${{ env.AWS_ANSIBLE_TIME }}")
+                TOTAL_ANSIBLE_SEC=$((TOTAL_ANSIBLE_SEC + AWS_SEC))
+                ANSIBLE_CLOUDS+=("AWS (EKS): ${{ env.AWS_ANSIBLE_TIME }}")
               fi
               if [[ "${{ inputs.target_cloud }}" == *"gcp"* ]] && [[ -n "${{ env.GCP_ANSIBLE_TIME }}" ]]; then
-                echo "  GCP (GKE) Ansible: ${{ env.GCP_ANSIBLE_TIME }}"
+                GCP_SEC=$(parse_time_to_seconds "${{ env.GCP_ANSIBLE_TIME }}")
+                TOTAL_ANSIBLE_SEC=$((TOTAL_ANSIBLE_SEC + GCP_SEC))
+                ANSIBLE_CLOUDS+=("GCP (GKE): ${{ env.GCP_ANSIBLE_TIME }}")
               fi
               if [[ "${{ inputs.target_cloud }}" == *"azure"* ]] && [[ -n "${{ env.AZURE_ANSIBLE_TIME }}" ]]; then
-                echo "  Azure (AKS) Ansible: ${{ env.AZURE_ANSIBLE_TIME }}"
+                AZURE_SEC=$(parse_time_to_seconds "${{ env.AZURE_ANSIBLE_TIME }}")
+                TOTAL_ANSIBLE_SEC=$((TOTAL_ANSIBLE_SEC + AZURE_SEC))
+                ANSIBLE_CLOUDS+=("Azure (AKS): ${{ env.AZURE_ANSIBLE_TIME }}")
               fi
             fi
             
+            # Display Infrastructure time with per-cloud breakdown
+            echo ""
+            echo "📦 Infrastructure (Terraform):"
+            if [[ -n "${{ env.TERRAFORM_TIME }}" ]]; then
+              TERRAFORM_TIME_STR="${{ env.TERRAFORM_TIME }}"
+              echo "  Total Duration: $TERRAFORM_TIME_STR"
+              
+              # Build list of clouds included
+              INFRA_CLOUDS=()
+              if [[ "${{ inputs.target_cloud }}" == *"aws"* ]]; then
+                INFRA_CLOUDS+=("AWS")
+              fi
+              if [[ "${{ inputs.target_cloud }}" == *"gcp"* ]]; then
+                INFRA_CLOUDS+=("GCP")
+              fi
+              if [[ "${{ inputs.target_cloud }}" == *"azure"* ]]; then
+                INFRA_CLOUDS+=("Azure")
+              fi
+              
+              # Show per-cloud breakdown
+              if [[ ${#INFRA_CLOUDS[@]} -gt 1 ]]; then
+                echo ""
+                echo "  Per-Cloud Infrastructure (provisioned together):"
+                for cloud in "${INFRA_CLOUDS[@]}"; do
+                  echo "    - $cloud: Included in $TERRAFORM_TIME_STR"
+                done
+                echo "    Note: All clouds are provisioned in parallel during Terraform apply"
+              elif [[ ${#INFRA_CLOUDS[@]} -eq 1 ]]; then
+                echo "  Cloud: ${INFRA_CLOUDS[0]}"
+              fi
+            else
+              echo "  Duration: Not available"
+            fi
+            
+            # Display Ansible time
+            if [[ "${{ inputs.deployment_mode }}" == "k8s" ]] && [[ ${#ANSIBLE_CLOUDS[@]} -gt 0 ]]; then
+              echo ""
+              echo "⚙️  Kubernetes Configuration (Ansible):"
+              echo "  Total Ansible Time: $(format_seconds $TOTAL_ANSIBLE_SEC)"
+              
+              # Show per-cloud breakdown if multiple clouds
+              if [[ ${#ANSIBLE_CLOUDS[@]} -gt 1 ]]; then
+                echo ""
+                echo "  Per-Cloud Breakdown:"
+                for cloud_time in "${ANSIBLE_CLOUDS[@]}"; do
+                  echo "    - $cloud_time"
+                done
+              fi
+            fi
+            
+            # Display total deployment time
+            echo ""
+            echo "⏱️  Total Deployment Time:"
             if [[ -n "${{ steps.time_provisioning.outputs.duration }}" ]]; then
               TOTAL_SEC=${{ steps.time_provisioning.outputs.duration }}
               TOTAL_MIN=$((TOTAL_SEC / 60))
               TOTAL_REMAINING_SEC=$((TOTAL_SEC % 60))
-              echo "  Total Deployment Time: ${TOTAL_MIN}m ${TOTAL_REMAINING_SEC}s"
+              echo "  Duration: ${TOTAL_MIN}m ${TOTAL_REMAINING_SEC}s"
+            else
+              echo "  Duration: Not available"
             fi
+            
+            echo "=========================================="
           fi
           
           echo ""
           echo "Status: ${{ job.status }}"
+
