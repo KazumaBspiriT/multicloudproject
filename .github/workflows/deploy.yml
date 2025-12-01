@@ -211,6 +211,33 @@ jobs:
           fi
           aws --version
 
+      # Check Docker for container mode with AWS/Azure (required for image mirroring)
+      - name: Check Docker
+        if: ${{ inputs.action == 'deploy' && inputs.deployment_mode == 'container' && (contains(inputs.target_cloud, 'aws') || contains(inputs.target_cloud, 'azure')) }}
+        run: |
+          echo "Checking Docker installation..."
+          if ! command -v docker &> /dev/null; then
+            echo "❌ Docker is not installed"
+            echo "Installing Docker..."
+            sudo apt-get update -y
+            sudo apt-get install -y docker.io
+            sudo systemctl start docker
+            sudo systemctl enable docker
+            # Add runner user to docker group (GitHub Actions)
+            sudo usermod -aG docker $USER || sudo usermod -aG docker runner || true
+          fi
+          
+          # Check if Docker daemon is running
+          if ! docker ps &> /dev/null; then
+            echo "⚠️  Docker daemon is not running. Starting..."
+            sudo systemctl start docker || sudo service docker start
+            sleep 2
+          fi
+          
+          docker --version
+          docker ps
+          echo "✅ Docker is installed and running"
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 

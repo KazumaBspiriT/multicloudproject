@@ -143,6 +143,27 @@ check_azure() {
     return $missing
 }
 
+# Function to check Docker (required for container mode with AWS/Azure)
+check_docker() {
+    echo -e "\n${BLUE}Checking Docker prerequisites...${NC}"
+    local missing=0
+    
+    if ! check_command "docker" "Install Docker: https://docs.docker.com/get-docker/"; then
+        missing=1
+    else
+        # Check if Docker daemon is running
+        if ! docker ps &>/dev/null; then
+            echo -e "${RED}[X] Docker daemon is not running${NC}"
+            echo -e "   ${YELLOW}Start Docker: sudo systemctl start docker (Linux) or start Docker Desktop${NC}"
+            missing=1
+        else
+            echo -e "${GREEN}[OK] Docker daemon is running${NC}"
+        fi
+    fi
+    
+    return $missing
+}
+
 # Function to check common prerequisites
 check_common() {
     echo -e "\n${BLUE}Checking common prerequisites...${NC}"
@@ -278,6 +299,16 @@ fi
 if [[ "$CLOUDS_INPUT" == *"azure"* ]]; then
     if ! check_azure; then
         CLOUD_CHECK_FAILED=1
+    fi
+fi
+
+# Check Docker if container mode is selected and AWS/Azure is in target clouds
+# (Docker is required for image mirroring to ECR/ACR)
+if [[ "$MODE" == "container" ]] && [[ "$ACTION" == "deploy" ]]; then
+    if [[ "$CLOUDS_INPUT" == *"aws"* ]] || [[ "$CLOUDS_INPUT" == *"azure"* ]]; then
+        if ! check_docker; then
+            CLOUD_CHECK_FAILED=1
+        fi
     fi
 fi
 

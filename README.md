@@ -43,7 +43,10 @@ Deploy containerized applications across AWS, Azure, and GCP using Terraform and
 - **Ansible** >= 2.9: `pip install ansible`
 - **kubectl**: [Installation Guide](https://kubernetes.io/docs/tasks/tools/)
 - **Python 3** with modules: `pip install kubernetes openshift jmespath`
-- **Docker** (optional, for containerized deployment): [Installation Guide](https://docs.docker.com/get-docker/)
+- **Docker** (required for container mode with AWS/Azure): [Installation Guide](https://docs.docker.com/get-docker/)
+  - Required for image mirroring to ECR (AWS) and ACR (Azure)
+  - Not required for GCP (Cloud Run supports Docker Hub directly)
+  - Not required for static or k8s modes
 
 #### Cloud-Specific Requirements
 
