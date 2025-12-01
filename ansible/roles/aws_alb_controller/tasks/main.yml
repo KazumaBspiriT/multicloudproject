@@ -3,7 +3,7 @@
 
 - name: Check if AWS Load Balancer Controller is already installed
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ playbook_dir }}/../kubeconfig.yaml"
+    kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default(playbook_dir + '/../kubeconfig.yaml', true) }}"
     api_version: apps/v1
     kind: Deployment
     name: aws-load-balancer-controller
@@ -34,7 +34,7 @@
 - name: Install AWS Load Balancer Controller using Helm
   when: alb_controller_check.resources | length == 0
   kubernetes.core.helm:
-    kubeconfig: "{{ playbook_dir }}/../kubeconfig.yaml"
+    kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default(playbook_dir + '/../kubeconfig.yaml', true) }}"
     name: aws-load-balancer-controller
     chart_ref: eks/aws-load-balancer-controller
     release_namespace: kube-system
@@ -52,7 +52,7 @@
 - name: Wait for AWS Load Balancer Controller to be ready
   when: alb_controller_check.resources | length == 0
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ playbook_dir }}/../kubeconfig.yaml"
+    kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default(playbook_dir + '/../kubeconfig.yaml', true) }}"
     api_version: apps/v1
     kind: Deployment
     name: aws-load-balancer-controller

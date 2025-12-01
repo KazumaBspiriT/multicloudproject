@@ -2,7 +2,7 @@
 
 - name: Create application namespace
   kubernetes.core.k8s:
-    kubeconfig: "{{ playbook_dir }}/../kubeconfig.yaml"
+    kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default(playbook_dir + '/../kubeconfig.yaml', true) }}"
     name: sample-app
     api_version: v1
     kind: Namespace
@@ -10,7 +10,7 @@
 
 - name: Deploy sample application (Deployment)
   kubernetes.core.k8s:
-    kubeconfig: "{{ playbook_dir }}/../kubeconfig.yaml"
+    kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default(playbook_dir + '/../kubeconfig.yaml', true) }}"
     state: present
     definition:
       apiVersion: apps/v1
@@ -40,7 +40,7 @@
 - name: Expose application via NodePort Service (for Ingress)
   when: domain_name | length > 0 and 'aws' in (target_clouds | default('')).split(',')
   kubernetes.core.k8s:
-    kubeconfig: "{{ playbook_dir }}/../kubeconfig.yaml"
+    kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default(playbook_dir + '/../kubeconfig.yaml', true) }}"
     state: present
     definition:
       apiVersion: v1
@@ -61,7 +61,7 @@
 - name: Expose application via LoadBalancer Service (No Domain or Non-AWS)
   when: domain_name | length == 0 or 'aws' not in (target_clouds | default('')).split(',')
   kubernetes.core.k8s:
-    kubeconfig: "{{ playbook_dir }}/../kubeconfig.yaml"
+    kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default(playbook_dir + '/../kubeconfig.yaml', true) }}"
     state: present
     definition:
       apiVersion: v1
@@ -88,7 +88,7 @@
 - name: Apply Ingress and Certificate
   when: domain_name | length > 0 and 'aws' in (target_clouds | default('')).split(',')
   kubernetes.core.k8s:
-    kubeconfig: "{{ playbook_dir }}/../kubeconfig.yaml"
+    kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default(playbook_dir + '/../kubeconfig.yaml', true) }}"
     state: present
     src: "{{ role_path }}/files/ingress_generated.yaml"
 
@@ -96,7 +96,7 @@
 - name: Wait for LoadBalancer IP/Hostname
   when: domain_name | length == 0
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ playbook_dir }}/../kubeconfig.yaml"
+    kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default(playbook_dir + '/../kubeconfig.yaml', true) }}"
     api_version: v1
     kind: Service
     name: portfolio-service
@@ -110,7 +110,7 @@
 - name: Wait for Ingress IP
   when: domain_name | length > 0 and 'aws' in (target_clouds | default('')).split(',')
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ playbook_dir }}/../kubeconfig.yaml"
+    kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default(playbook_dir + '/../kubeconfig.yaml', true) }}"
     api_version: networking.k8s.io/v1
     kind: Ingress
     name: portfolio-ingress

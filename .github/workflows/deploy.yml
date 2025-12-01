@@ -444,11 +444,48 @@ jobs:
         run: |
           echo "Configuring kubeconfig for GKE (GCP)..."
           if [[ -n "${{ env.GKE_NAME }}" ]]; then
-            gcloud container clusters get-credentials "${{ env.GKE_NAME }}" --region "us-central1"
-            # Copy default config to kubeconfig.yaml for Ansible
-            cp $HOME/.kube/config ./kubeconfig.yaml
-            chmod 600 ./kubeconfig.yaml
-            echo "✅ GKE kubeconfig configured"
+            # Ensure gcloud is authenticated with service account
+            echo "Verifying gcloud authentication..."
+            gcloud auth list
+            
+            # Get the project ID
+            GCP_PROJECT=$(gcloud config get-value project 2>/dev/null || echo "")
+            if [ -z "$GCP_PROJECT" ]; then
+              echo "⚠️  Warning: Could not get GCP project. Trying to extract from service account..."
+              GCP_PROJECT=$(echo '${{ secrets.GCP_SA_KEY }}' | jq -r '.project_id // empty' 2>/dev/null || echo "")
+            fi
+            
+            if [ -z "$GCP_PROJECT" ]; then
+              echo "❌ Error: Could not determine GCP project ID"
+              exit 1
+            fi
+            
+            echo "Using GCP Project: $GCP_PROJECT"
+            
+            # Get credentials and write directly to kubeconfig.yaml using absolute path
+            KUBECONFIG_PATH="${{ github.workspace }}/kubeconfig.yaml"
+            export KUBECONFIG="$KUBECONFIG_PATH"
+            
+            echo "Fetching GKE credentials..."
+            gcloud container clusters get-credentials "${{ env.GKE_NAME }}" \
+              --region "us-central1" \
+              --project "$GCP_PROJECT" \
+              --kubeconfig="$KUBECONFIG_PATH"
+            
+            # Verify kubeconfig is valid and has proper authentication
+            chmod 600 "$KUBECONFIG_PATH"
+            echo "Verifying kubeconfig authentication..."
+            
+            # Test cluster access
+            if kubectl --kubeconfig="$KUBECONFIG_PATH" cluster-info &>/dev/null; then
+              echo "✅ GKE kubeconfig configured and authenticated"
+              kubectl --kubeconfig="$KUBECONFIG_PATH" get nodes || echo "⚠️  Warning: Could not list nodes (cluster may still be provisioning)"
+            else
+              echo "❌ Error: Failed to authenticate with GKE cluster"
+              echo "Checking kubeconfig contents..."
+              cat "$KUBECONFIG_PATH" | head -20
+              exit 1
+            fi
           else
             echo "⚠️  GKE cluster name not found in outputs"
           fi
@@ -456,12 +493,32 @@ jobs:
       - name: Run Ansible for GKE (GCP - LoadBalancer only, no domain)
         if: ${{ inputs.action == 'deploy' && contains(inputs.target_cloud, 'gcp') && inputs.deployment_mode == 'k8s' }}
         env:
-          KUBECONFIG: kubeconfig.yaml
+          KUBECONFIG: ${{ github.workspace }}/kubeconfig.yaml
         run: |
           if [ ! -f ansible/inventory.yml ] || [ ! -f ansible/playbook.yml ]; then
             echo "Ansible files not present, skipping."
             exit 0
           fi
+          
+          KUBECONFIG_PATH="${{ github.workspace }}/kubeconfig.yaml"
+          
+          # Verify kubeconfig exists and is accessible
+          if [ ! -f "$KUBECONFIG_PATH" ]; then
+            echo "❌ Error: kubeconfig.yaml not found at $KUBECONFIG_PATH!"
+            exit 1
+          fi
+          
+          # Test kubectl access before running Ansible
+          echo "Testing kubectl access to GKE cluster..."
+          if ! kubectl --kubeconfig="$KUBECONFIG_PATH" cluster-info &>/dev/null; then
+            echo "❌ Error: Cannot access GKE cluster. Authentication failed."
+            echo "Current gcloud auth:"
+            gcloud auth list
+            echo "Kubeconfig location: $KUBECONFIG_PATH"
+            exit 1
+          fi
+          
+          echo "✅ kubectl access verified"
           
           # For GCP, no domain, no AWS vars - just LoadBalancer service (no ALB, no Ingress)
           EXTRA_VARS="deployment_mode=${{ inputs.deployment_mode }} app_image=${{ inputs.app_image }} domain_name= target_clouds=gcp"
