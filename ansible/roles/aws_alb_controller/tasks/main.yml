@@ -3,16 +3,22 @@
 
 - name: Check if AWS Load Balancer Controller is already installed
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default(playbook_dir + '/../kubeconfig.yaml', true) }}"
+    kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default(playbook_dir + '/../../kubeconfig.yaml', true) }}"
     api_version: apps/v1
     kind: Deployment
     name: aws-load-balancer-controller
     namespace: kube-system
   register: alb_controller_check
   ignore_errors: yes
+  failed_when: false
+  changed_when: false
+
+- name: Set fact for controller installation needed
+  set_fact:
+    install_controller: "{{ alb_controller_check is failed or (alb_controller_check.resources is defined and alb_controller_check.resources | length == 0) }}"
 
 - name: Add EKS Helm repository
-  when: alb_controller_check.resources | length == 0
+  when: install_controller | bool
   kubernetes.core.helm_repository:
     name: eks
     repo_url: https://aws.github.io/eks-charts
@@ -26,15 +32,15 @@
       - "eks_lb_role_arn: {{ eks_lb_role_arn | default('NOT SET') }}"
 
 - name: Generate Helm values file
-  when: alb_controller_check.resources | length == 0
+  when: install_controller | bool
   ansible.builtin.template:
     src: "{{ role_path }}/templates/values.yaml.j2"
     dest: "{{ role_path }}/files/values_generated.yaml"
 
 - name: Install AWS Load Balancer Controller using Helm
-  when: alb_controller_check.resources | length == 0
+  when: install_controller | bool
   kubernetes.core.helm:
-    kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default(playbook_dir + '/../kubeconfig.yaml', true) }}"
+    kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default(playbook_dir + '/../../kubeconfig.yaml', true) }}"
     name: aws-load-balancer-controller
     chart_ref: eks/aws-load-balancer-controller
     release_namespace: kube-system
@@ -50,9 +56,9 @@
   until: alb_controller_install is not failed
 
 - name: Wait for AWS Load Balancer Controller to be ready
-  when: alb_controller_check.resources | length == 0
+  when: install_controller | bool
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default(playbook_dir + '/../kubeconfig.yaml', true) }}"
+    kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default(playbook_dir + '/../../kubeconfig.yaml', true) }}"
     api_version: apps/v1
     kind: Deployment
     name: aws-load-balancer-controller
