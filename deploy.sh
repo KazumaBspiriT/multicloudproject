@@ -672,10 +672,16 @@ if [ "$ACTION" == "destroy" ]; then
   
   # Warn about hosted zones and DNS records
   echo -e "\n${YELLOW}Note about DNS resources:${NC}"
-  echo "  - Route 53 Hosted Zones: Will be PRESERVED (not destroyed)"
-  echo "  - DNS Records: Will be PRESERVED (not destroyed)"
-  echo "  - ACM Certificates: Will be DESTROYED"
-  echo "  - To destroy hosted zones, run terraform destroy manually with domain_name"
+  if [[ -n "$DOMAIN_NAME" ]]; then
+    echo "  - Route 53 Hosted Zones: Will be DESTROYED (automatic cleanup)"
+    echo "  - DNS Records: Will be DESTROYED (automatic cleanup before/after destroy)"
+    echo "  - ACM Certificates: Will be DESTROYED"
+    echo "  - Cleanup runs automatically to delete orphaned App Runner/ACM records"
+  else
+    echo "  - Route 53 Hosted Zones: Will be PRESERVED (no domain_name provided)"
+    echo "  - DNS Records: Will be PRESERVED (no domain_name provided)"
+    echo "  - ACM Certificates: Will be DESTROYED (if they exist)"
+  fi
   
   echo -e "\n${BLUE}Note about VPC cleanup:${NC}"
   echo "  - If VPCs are not deleted automatically, the script will attempt to clean them up"
@@ -714,6 +720,186 @@ if [ "$ACTION" == "destroy" ]; then
     fi
   fi
 
+  # Pre-destroy cleanup: Delete Route 53 records to allow hosted zone deletion
+  # This runs regardless of deployment mode to catch orphaned records from App Runner, ACM, etc.
+  if [[ "$CLOUDS_INPUT" == *"aws"* ]]; then
+    echo -e "\n${BLUE}Cleaning up Route 53 records before hosted zone deletion...${NC}"
+    
+    # Extract apex domain for zone lookup (use domain_name if provided, otherwise try to find any zone)
+    APEX_DOMAIN=""
+    if [[ -n "$DOMAIN_NAME" ]]; then
+      APEX_DOMAIN="$DOMAIN_NAME"
+      if [[ "$DOMAIN_NAME" =~ ^www\. ]]; then
+        APEX_DOMAIN="${DOMAIN_NAME#www.}"
+      elif [[ "$DOMAIN_NAME" =~ ^[^.]+\. ]]; then
+        PARTS=$(echo "$DOMAIN_NAME" | tr '.' '\n' | wc -l)
+        if [[ $PARTS -gt 2 ]]; then
+          APEX_DOMAIN=$(echo "$DOMAIN_NAME" | sed 's/^[^.]*\.//')
+        fi
+      fi
+    fi
+    
+    # Find hosted zone - try by domain name first, then by project name pattern
+    ZONE_ID=""
+    if [[ -n "$APEX_DOMAIN" ]]; then
+      ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$APEX_DOMAIN" --query 'HostedZones[0].Id' --output text 2>/dev/null | cut -d'/' -f3)
+    fi
+    
+    # If not found by domain, try to find any zone that might be related to the project
+    if [[ -z "$ZONE_ID" ]] || [[ "$ZONE_ID" == "None" ]]; then
+      PROJECT_NAME=$(terraform output -raw project_name 2>/dev/null || echo "multi-cloud-app")
+      ZONE_ID=$(aws route53 list-hosted-zones --query "HostedZones[?contains(Name, '$PROJECT_NAME') || contains(Config.Comment, '$PROJECT_NAME')].Id" --output text 2>/dev/null | head -1 | cut -d'/' -f3)
+    fi
+    
+    if [[ -n "$ZONE_ID" ]] && [[ "$ZONE_ID" != "None" ]]; then
+      ZONE_NAME=$(aws route53 get-hosted-zone --id "$ZONE_ID" --query 'HostedZone.Name' --output text 2>/dev/null || echo "unknown")
+      echo -e "${BLUE}Found hosted zone: $ZONE_ID ($ZONE_NAME)${NC}"
+      
+      # Get all records except NS and SOA (these are required and can't be deleted)
+      # Use max-items to ensure we get all records (Route 53 has a default limit)
+      # Also filter out any records that might be managed by AWS services (like delegation sets)
+      ALL_RECORDS=$(aws route53 list-resource-record-sets --hosted-zone-id "$ZONE_ID" \
+        --max-items 1000 \
+        --query "ResourceRecordSets[?Type != 'NS' && Type != 'SOA']" \
+        --output json 2>/dev/null || echo "[]")
+      
+      # Also specifically look for App Runner and ACM-related records
+      echo -e "${BLUE}Scanning for orphaned App Runner/ACM certificate validation records...${NC}"
+      
+      if command -v jq &> /dev/null; then
+        RECORD_COUNT=$(echo "$ALL_RECORDS" | jq 'length' 2>/dev/null || echo "0")
+        
+        if [[ "$RECORD_COUNT" -gt 0 ]] && [[ "$RECORD_COUNT" != "0" ]]; then
+          echo -e "${YELLOW}Found $RECORD_COUNT record(s) to delete...${NC}"
+          
+          # Build change batch to delete all records
+          # Route 53 allows up to 1000 changes per batch
+          # We need to include all fields that Route 53 requires for DELETE operations
+          CHANGE_BATCH=$(echo "$ALL_RECORDS" | jq '{
+            Changes: [.[] | {
+              Action: "DELETE",
+              ResourceRecordSet: ({
+                Name: .Name,
+                Type: .Type,
+                TTL: (.TTL // 300),
+                ResourceRecords: (.ResourceRecords // []),
+                AliasTarget: (.AliasTarget // empty)
+              } | with_entries(select(.value != null and .value != [])))
+            }]
+          }' 2>/dev/null)
+          
+          # Debug: Show what we're trying to delete
+          if [[ -n "$CHANGE_BATCH" ]] && [[ "$CHANGE_BATCH" != "{}" ]]; then
+            DELETE_COUNT=$(echo "$CHANGE_BATCH" | jq '.Changes | length' 2>/dev/null || echo "0")
+            echo -e "${BLUE}Prepared deletion batch for $DELETE_COUNT record(s)${NC}"
+          fi
+          
+          if [[ -n "$CHANGE_BATCH" ]] && [[ "$CHANGE_BATCH" != "{}" ]]; then
+            echo -e "${YELLOW}Deleting all DNS records from hosted zone...${NC}"
+            TEMP_R53_CHANGE=$(mktemp)
+            echo "$CHANGE_BATCH" > "$TEMP_R53_CHANGE"
+            
+            # Try to delete with error output for debugging
+            CHANGE_OUTPUT=$(aws route53 change-resource-record-sets \
+              --hosted-zone-id "$ZONE_ID" \
+              --change-batch "file://$TEMP_R53_CHANGE" \
+              --output json 2>&1)
+            
+            CHANGE_ID=$(echo "$CHANGE_OUTPUT" | jq -r '.ChangeInfo.Id // empty' 2>/dev/null || echo "")
+            
+            if [[ -z "$CHANGE_ID" ]]; then
+              # Check for specific error
+              ERROR_MSG=$(echo "$CHANGE_OUTPUT" | grep -i "error\|invalid\|failed" || echo "")
+              if [[ -n "$ERROR_MSG" ]]; then
+                echo -e "${YELLOW}   Batch deletion error: $ERROR_MSG${NC}"
+                # Save the batch file for debugging
+                echo -e "${YELLOW}   Batch file saved for debugging: $TEMP_R53_CHANGE${NC}"
+              fi
+            fi
+            
+            rm -f "$TEMP_R53_CHANGE"
+            
+            if [[ -n "$CHANGE_ID" ]]; then
+              echo -e "${GREEN}✅ DNS records deletion initiated (Change ID: $CHANGE_ID)${NC}"
+              echo -e "${BLUE}Waiting for record deletion to complete...${NC}"
+              # Wait for change to complete (max 60 seconds)
+              for i in {1..12}; do
+                STATUS=$(aws route53 get-change --id "$CHANGE_ID" --query 'ChangeInfo.Status' --output text 2>/dev/null || echo "PENDING")
+                if [[ "$STATUS" == "INSYNC" ]]; then
+                  echo -e "${GREEN}✅ DNS records deleted successfully${NC}"
+                  break
+                fi
+                if [[ $i -eq 12 ]]; then
+                  echo -e "${YELLOW}⚠️  Deletion still in progress (waited 60s). Continuing...${NC}"
+                else
+                  sleep 5
+                fi
+              done
+            else
+              echo -e "${RED}❌ Could not delete DNS records via batch operation${NC}"
+              echo -e "${YELLOW}   Attempting to delete records individually...${NC}"
+              # Fallback: try deleting records one at a time by fetching exact record from Route 53
+              echo "$ALL_RECORDS" | jq -r '.[] | "\(.Name)|\(.Type)"' 2>/dev/null | while IFS='|' read -r record_name record_type; do
+                if [[ -n "$record_name" ]] && [[ -n "$record_type" ]]; then
+                  echo -e "${BLUE}    Fetching exact record: $record_name ($record_type)${NC}"
+                  
+                  # Get the exact record from Route 53 (this ensures we have the correct structure)
+                  EXACT_RECORD=$(aws route53 list-resource-record-sets \
+                    --hosted-zone-id "$ZONE_ID" \
+                    --query "ResourceRecordSets[?Name=='$record_name' && Type=='$record_type']" \
+                    --output json 2>/dev/null | jq '.[0]' 2>/dev/null)
+                  
+                  if [[ -n "$EXACT_RECORD" ]] && [[ "$EXACT_RECORD" != "null" ]]; then
+                    echo -e "${BLUE}      Deleting: $record_name ($record_type)${NC}"
+                    SINGLE_DELETE=$(echo "$EXACT_RECORD" | jq "{
+                      Changes: [{
+                        Action: \"DELETE\",
+                        ResourceRecordSet: .
+                      }]
+                    }" 2>/dev/null)
+                    
+                    TEMP_SINGLE=$(mktemp)
+                    echo "$SINGLE_DELETE" > "$TEMP_SINGLE"
+                    
+                    DELETE_OUTPUT=$(aws route53 change-resource-record-sets \
+                      --hosted-zone-id "$ZONE_ID" \
+                      --change-batch "file://$TEMP_SINGLE" \
+                      --output json 2>&1)
+                    
+                    DELETE_ID=$(echo "$DELETE_OUTPUT" | jq -r '.ChangeInfo.Id // empty' 2>/dev/null || echo "")
+                    
+                    if [[ -n "$DELETE_ID" ]]; then
+                      echo -e "${GREEN}      ✅ Deleted (Change ID: $DELETE_ID)${NC}"
+                    else
+                      ERROR=$(echo "$DELETE_OUTPUT" | grep -oP '(?<="message": ")[^"]*' | head -1 || echo "Unknown error")
+                      if [[ -z "$ERROR" ]]; then
+                        ERROR=$(echo "$DELETE_OUTPUT" | grep -i "error\|invalid\|failed" | head -1 || echo "Record may already be deleted")
+                      fi
+                      echo -e "${YELLOW}      ⚠️  $ERROR${NC}"
+                    fi
+                    rm -f "$TEMP_SINGLE"
+                    sleep 1  # Small delay to avoid rate limiting
+                  else
+                    echo -e "${YELLOW}      ⚠️  Record not found (may already be deleted)${NC}"
+                  fi
+                fi
+              done
+              echo -e "${YELLOW}   Individual deletion attempts completed${NC}"
+              echo -e "${YELLOW}   If destroy still fails, manually delete records in Route 53 console and re-run destroy${NC}"
+            fi
+          fi
+        else
+          echo -e "${GREEN}✅ No DNS records to delete (only NS/SOA records remain)${NC}"
+        fi
+      else
+        echo -e "${YELLOW}⚠️  jq not available - skipping Route 53 record cleanup${NC}"
+        echo -e "${YELLOW}   You may need to manually delete records before hosted zone can be deleted${NC}"
+      fi
+    else
+      echo -e "${BLUE}No hosted zone found for $APEX_DOMAIN (may already be deleted)${NC}"
+    fi
+  fi
+
   if [[ "$MODE" == "all" ]]; then
     # Destroy all modes sequentially
     for destroy_mode in k8s container static; do
@@ -745,6 +931,83 @@ if [ "$ACTION" == "destroy" ]; then
   
   # Clean up temporary file
   rm -f "$TEMP_TFVARS"
+
+  # Post-destroy cleanup: If hosted zone deletion failed, clean up remaining records
+  if [[ -n "$DOMAIN_NAME" ]] && [[ "$CLOUDS_INPUT" == *"aws"* ]]; then
+    echo -e "\n${BLUE}Checking for remaining Route 53 records after destroy...${NC}"
+    
+    # Extract apex domain for zone lookup
+    APEX_DOMAIN="$DOMAIN_NAME"
+    if [[ "$DOMAIN_NAME" =~ ^www\. ]]; then
+      APEX_DOMAIN="${DOMAIN_NAME#www.}"
+    elif [[ "$DOMAIN_NAME" =~ ^[^.]+\. ]]; then
+      PARTS=$(echo "$DOMAIN_NAME" | tr '.' '\n' | wc -l)
+      if [[ $PARTS -gt 2 ]]; then
+        APEX_DOMAIN=$(echo "$DOMAIN_NAME" | sed 's/^[^.]*\.//')
+      fi
+    fi
+    
+    # Find hosted zone by domain name
+    ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$APEX_DOMAIN" --query 'HostedZones[0].Id' --output text 2>/dev/null | cut -d'/' -f3)
+    
+    if [[ -n "$ZONE_ID" ]] && [[ "$ZONE_ID" != "None" ]]; then
+      # Get all records except NS and SOA
+      REMAINING_RECORDS=$(aws route53 list-resource-record-sets --hosted-zone-id "$ZONE_ID" \
+        --max-items 1000 \
+        --query "ResourceRecordSets[?Type != 'NS' && Type != 'SOA']" \
+        --output json 2>/dev/null || echo "[]")
+      
+      if command -v jq &> /dev/null; then
+        REMAINING_COUNT=$(echo "$REMAINING_RECORDS" | jq 'length' 2>/dev/null || echo "0")
+        
+        if [[ "$REMAINING_COUNT" -gt 0 ]] && [[ "$REMAINING_COUNT" != "0" ]]; then
+          echo -e "${YELLOW}Found $REMAINING_COUNT remaining record(s) in hosted zone $ZONE_ID${NC}"
+          echo -e "${YELLOW}These records are preventing hosted zone deletion. Cleaning up...${NC}"
+          
+          # Build change batch to delete all remaining records
+          CLEANUP_BATCH=$(echo "$REMAINING_RECORDS" | jq '{
+            Changes: [.[] | {
+              Action: "DELETE",
+              ResourceRecordSet: {
+                Name: .Name,
+                Type: .Type,
+                TTL: (.TTL // 300),
+                ResourceRecords: (.ResourceRecords // []),
+                AliasTarget: (.AliasTarget // empty)
+              }
+            }]
+          }' 2>/dev/null)
+          
+          if [[ -n "$CLEANUP_BATCH" ]] && [[ "$CLEANUP_BATCH" != "{}" ]]; then
+            TEMP_CLEANUP=$(mktemp)
+            echo "$CLEANUP_BATCH" > "$TEMP_CLEANUP"
+            
+            CLEANUP_CHANGE_ID=$(aws route53 change-resource-record-sets \
+              --hosted-zone-id "$ZONE_ID" \
+              --change-batch "file://$TEMP_CLEANUP" \
+              --query 'ChangeInfo.Id' \
+              --output text 2>/dev/null || echo "")
+            
+            rm -f "$TEMP_CLEANUP"
+            
+            if [[ -n "$CLEANUP_CHANGE_ID" ]]; then
+              echo -e "${GREEN}✅ Remaining DNS records deletion initiated (Change ID: $CLEANUP_CHANGE_ID)${NC}"
+              echo -e "${BLUE}Waiting for cleanup to complete...${NC}"
+              aws route53 wait resource-record-sets-changed --id "$CLEANUP_CHANGE_ID" 2>/dev/null || sleep 10
+              echo -e "${GREEN}✅ Remaining DNS records deleted${NC}"
+              echo -e "${YELLOW}💡 You can now re-run 'terraform destroy' to delete the hosted zone${NC}"
+            else
+              echo -e "${RED}❌ Failed to delete remaining records${NC}"
+              echo -e "${YELLOW}   Please manually delete records in Route 53 console:${NC}"
+              echo "$REMAINING_RECORDS" | jq -r '.[] | "   - \(.Name) (\(.Type))"' 2>/dev/null || echo "   (Use 'aws route53 list-resource-record-sets --hosted-zone-id $ZONE_ID' to see records)"
+            fi
+          fi
+        else
+          echo -e "${GREEN}✅ No remaining DNS records (hosted zone should be deletable)${NC}"
+        fi
+      fi
+    fi
+  fi
 
   # Cleanup orphaned NAT Gateways first (these are expensive - ~$32/month each!)
   echo -e "\n${RED}⚠️  Checking for orphaned NAT Gateways (these cost ~$32/month each!)...${NC}"

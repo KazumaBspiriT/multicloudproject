@@ -3,13 +3,27 @@ name: Multi-Cloud Deployment Pipeline
 on:
   workflow_dispatch:
     inputs:
+      action:
+        description: 'Action to perform (deploy or destroy)'
+        required: true
+        type: choice
+        options:
+          - deploy
+          - destroy
+        default: 'deploy'
       target_cloud:
-        description: 'Target Cloud (aws, azure, gcp)'
+        description: 'Target Cloud (aws, azure, gcp) - comma-separated for multi-cloud'
         required: true
         default: 'aws'
       deployment_mode:
         description: 'Deployment Mode (k8s, container, or static)'
         required: true
+        type: choice
+        options:
+          - k8s
+          - container
+          - static
+          - all
         default: 'k8s'
       app_image:
         description: 'Container Image (Docker Hub URI for GCP/Azure/General)'
@@ -19,6 +33,11 @@ on:
         description: 'Custom Domain Name (optional)'
         required: false
         default: ''
+      enable_nat_gateway:
+        description: 'Enable NAT Gateway for AWS EKS (costs ~$32/month)'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   deploy:
@@ -32,10 +51,101 @@ jobs:
       AWS_REGION: us-east-2
       TF_IN_AUTOMATION: true
       TF_INPUT: false
-      ENABLE_NAT_GATEWAY: false # Default to false to save costs
+      ENABLE_NAT_GATEWAY: ${{ inputs.enable_nat_gateway }}
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Validate Required Secrets
+        run: |
+          echo "🔍 Validating required secrets..."
+          MISSING_SECRETS=0
+          
+          # AWS secrets are ALWAYS required (for S3 backend)
+          echo "Checking AWS secrets (required for S3 backend)..."
+          if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ]; then
+            echo "❌ Missing: AWS_ACCESS_KEY_ID"
+            MISSING_SECRETS=1
+          else
+            echo "✅ AWS_ACCESS_KEY_ID is set"
+          fi
+          
+          if [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
+            echo "❌ Missing: AWS_SECRET_ACCESS_KEY"
+            MISSING_SECRETS=1
+          else
+            echo "✅ AWS_SECRET_ACCESS_KEY is set"
+          fi
+          
+          # Check GCP secrets if GCP is in target clouds
+          if [[ "${{ inputs.target_cloud }}" == *"gcp"* ]]; then
+            echo ""
+            echo "Checking GCP secrets (required for GCP deployment)..."
+            if [ -z "${{ secrets.GCP_SA_KEY }}" ]; then
+              echo "❌ Missing: GCP_SA_KEY"
+              MISSING_SECRETS=1
+            else
+              # Validate JSON format (if jq is available)
+              if command -v jq &> /dev/null; then
+                if echo "${{ secrets.GCP_SA_KEY }}" | jq empty 2>/dev/null; then
+                  echo "✅ GCP_SA_KEY is set and valid JSON"
+                else
+                  echo "⚠️  GCP_SA_KEY is set but may not be valid JSON"
+                  echo "   Make sure you copied ONLY the JSON content (no extra text)"
+                fi
+              else
+                echo "✅ GCP_SA_KEY is set"
+                echo "   (JSON validation skipped - jq not available)"
+              fi
+            fi
+          fi
+          
+          # Check Azure secrets if Azure is in target clouds
+          if [[ "${{ inputs.target_cloud }}" == *"azure"* ]]; then
+            echo ""
+            echo "Checking Azure secrets (required for Azure deployment)..."
+            if [ -z "${{ secrets.ARM_CLIENT_ID }}" ]; then
+              echo "❌ Missing: ARM_CLIENT_ID"
+              MISSING_SECRETS=1
+            else
+              echo "✅ ARM_CLIENT_ID is set"
+            fi
+            
+            if [ -z "${{ secrets.ARM_CLIENT_SECRET }}" ]; then
+              echo "❌ Missing: ARM_CLIENT_SECRET"
+              MISSING_SECRETS=1
+            else
+              echo "✅ ARM_CLIENT_SECRET is set"
+            fi
+            
+            if [ -z "${{ secrets.ARM_SUBSCRIPTION_ID }}" ]; then
+              echo "❌ Missing: ARM_SUBSCRIPTION_ID"
+              MISSING_SECRETS=1
+            else
+              echo "✅ ARM_SUBSCRIPTION_ID is set"
+            fi
+            
+            if [ -z "${{ secrets.ARM_TENANT_ID }}" ]; then
+              echo "❌ Missing: ARM_TENANT_ID"
+              MISSING_SECRETS=1
+            else
+              echo "✅ ARM_TENANT_ID is set"
+            fi
+          fi
+          
+          if [ $MISSING_SECRETS -eq 1 ]; then
+            echo ""
+            echo "❌❌❌ VALIDATION FAILED ❌❌❌"
+            echo ""
+            echo "Missing required secrets. Please configure them in:"
+            echo "Repository Settings → Secrets and variables → Actions"
+            echo ""
+            echo "See README.md for detailed setup instructions."
+            exit 1
+          fi
+          
+          echo ""
+          echo "✅ All required secrets are configured!"
 
       - name: Start Provisioning Timer
         id: timer_start
@@ -54,6 +164,25 @@ jobs:
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Extract GCP Project ID from Service Account Key
+        if: ${{ contains(inputs.target_cloud, 'gcp') }}
+        id: gcp_project
+        run: |
+          # Install jq if not available
+          if ! command -v jq &> /dev/null; then
+            sudo apt-get update -y && sudo apt-get install -y jq
+          fi
+          
+          GCP_PROJECT_ID=$(echo '${{ secrets.GCP_SA_KEY }}' | jq -r '.project_id // empty' 2>/dev/null || echo "")
+          if [[ -n "$GCP_PROJECT_ID" ]]; then
+            echo "project_id=$GCP_PROJECT_ID" >> "$GITHUB_OUTPUT"
+            echo "✅ Extracted GCP Project ID: $GCP_PROJECT_ID"
+          else
+            echo "⚠️  Could not extract project_id from GCP_SA_KEY"
+            echo "   Make sure the service account key JSON contains 'project_id' field"
+            exit 1
+          fi
 
       - name: Setup Google Cloud SDK
         if: ${{ contains(inputs.target_cloud, 'gcp') }}
@@ -99,6 +228,7 @@ jobs:
             -backend-config="encrypt=true"
 
       - name: Terraform Plan
+        if: ${{ inputs.action == 'deploy' }}
         id: plan
         env:
           ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
@@ -110,16 +240,24 @@ jobs:
           CLOUDS_INPUT="${{ inputs.target_cloud }}"
           TF_CLOUDS_LIST="[\"$(echo $CLOUDS_INPUT | sed 's/,/\",\"/g')\"]"
           
-          terraform plan \
-            -input=false \
-            -var="target_clouds=$TF_CLOUDS_LIST" \
-            -var="deployment_mode=${{ inputs.deployment_mode }}" \
-            -var="app_image=${{ inputs.app_image }}" \
-            -var="domain_name=${{ inputs.domain_name }}" \
-            -var="enable_nat_gateway=${{ env.ENABLE_NAT_GATEWAY }}" \
-            -out=tfplan.out
+          TF_PLAN_ARGS=(
+            -input=false
+            -var="target_clouds=$TF_CLOUDS_LIST"
+            -var="deployment_mode=${{ inputs.deployment_mode }}"
+            -var="app_image=${{ inputs.app_image }}"
+            -var="domain_name=${{ inputs.domain_name }}"
+            -var="enable_nat_gateway=${{ env.ENABLE_NAT_GATEWAY }}"
+          )
+          
+          # Add GCP project ID if GCP is in target clouds
+          if [[ "$CLOUDS_INPUT" == *"gcp"* ]] && [[ -n "${{ steps.gcp_project.outputs.project_id }}" ]]; then
+            TF_PLAN_ARGS+=(-var="gcp_project_id=${{ steps.gcp_project.outputs.project_id }}")
+          fi
+          
+          terraform plan "${TF_PLAN_ARGS[@]}" -out=tfplan.out
 
       - name: Terraform Apply (Provisioning)
+        if: ${{ inputs.action == 'deploy' }}
         id: apply
         env:
           ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
@@ -129,6 +267,7 @@ jobs:
         run: terraform apply -input=false tfplan.out
 
       - name: Export Terraform outputs safely
+        if: ${{ inputs.action == 'deploy' }}
         id: tf_outputs
         shell: bash
         run: |
@@ -190,7 +329,7 @@ jobs:
           fi
 
       - name: Configure Kubeconfig for GKE
-        if: ${{ inputs.target_cloud == 'gcp' && inputs.deployment_mode == 'k8s' }}
+        if: ${{ inputs.action == 'deploy' && inputs.target_cloud == 'gcp' && inputs.deployment_mode == 'k8s' }}
         run: |
           # Retrieve credentials using the cluster name from Terraform outputs
           # Assumes 'setup-gcloud' has already configured the project from credentials or default
@@ -199,6 +338,7 @@ jobs:
           cp $HOME/.kube/config ./kubeconfig.yaml
 
       - name: Measure Provisioning Time
+        if: ${{ inputs.action == 'deploy' }}
         id: time_provisioning
         run: |
           end=$(date +%s)
@@ -208,25 +348,25 @@ jobs:
 
       # ---- Ansible only for k8s mode (if you actually have these files) ----
       - name: Setup Python and Ansible
-        if: ${{ inputs.deployment_mode == 'k8s' }}
+        if: ${{ inputs.action == 'deploy' && inputs.deployment_mode == 'k8s' }}
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
 
       - name: Install kubectl
-        if: ${{ inputs.deployment_mode == 'k8s' }}
+        if: ${{ inputs.action == 'deploy' && inputs.deployment_mode == 'k8s' }}
         uses: azure/setup-kubectl@v3
         with:
           version: 'latest'
 
       - name: Install Helm
-        if: ${{ inputs.deployment_mode == 'k8s' }}
+        if: ${{ inputs.action == 'deploy' && inputs.deployment_mode == 'k8s' }}
         uses: azure/setup-helm@v3
         with:
           version: 'latest'
 
       - name: Install Ansible + k8s deps
-        if: ${{ inputs.deployment_mode == 'k8s' }}
+        if: ${{ inputs.action == 'deploy' && inputs.deployment_mode == 'k8s' }}
         run: |
           pip install ansible kubernetes openshift jmespath
           ansible-galaxy collection install kubernetes.core community.general
@@ -244,7 +384,7 @@ jobs:
           fi
 
       - name: Run Ansible (K8s Mode)
-        if: ${{ inputs.deployment_mode == 'k8s' }}
+        if: ${{ inputs.action == 'deploy' && inputs.deployment_mode == 'k8s' }}
         env:
           KUBECONFIG: kubeconfig.yaml
         run: |
@@ -256,7 +396,7 @@ jobs:
             --extra-vars "deployment_mode=${{ inputs.deployment_mode }} app_image=${{ inputs.app_image }} domain_name=${{ inputs.domain_name }} target_clouds=${{ inputs.target_cloud }} acm_certificate_arn=${{ env.ACM_CERT_ARN }} eks_cluster_name=${{ env.EKS_CLUSTER_NAME }} eks_vpc_id=${{ env.EKS_VPC_ID }} aws_region=${{ env.AWS_REGION }} eks_lb_role_arn=${{ env.EKS_LB_ROLE_ARN }}"
 
       - name: Update Route 53 DNS (Auto)
-        if: ${{ inputs.deployment_mode == 'k8s' && inputs.target_cloud == 'aws' && inputs.domain_name != '' }}
+        if: ${{ inputs.action == 'deploy' && inputs.deployment_mode == 'k8s' && inputs.target_cloud == 'aws' && inputs.domain_name != '' }}
         env:
           KUBECONFIG: kubeconfig.yaml
           DOMAIN_NAME: ${{ inputs.domain_name }}
@@ -323,24 +463,210 @@ jobs:
             fi
           fi
 
+      # Display Terraform Outputs
+      - name: Display Terraform Outputs
+        if: ${{ inputs.action == 'deploy' && success() }}
+        run: |
+          echo "=========================================="
+          echo "📊 Deployment Outputs"
+          echo "=========================================="
+          if terraform output >/dev/null 2>&1; then
+            terraform output
+          else
+            echo "⚠️  No outputs available"
+          fi
+
+      # Display Nameserver Instructions (if domain provided)
+      - name: Display Nameserver Instructions
+        if: ${{ inputs.action == 'deploy' && inputs.domain_name != '' && contains(inputs.target_cloud, 'aws') && success() }}
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "⚠️  IMPORTANT: Update Domain Nameservers"
+          echo "=========================================="
+          
+          # Extract apex domain
+          DOMAIN="${{ inputs.domain_name }}"
+          if [[ "$DOMAIN" =~ ^www\. ]]; then
+            APEX_DOMAIN="${DOMAIN#www.}"
+          elif [[ "$DOMAIN" =~ ^[^.]+\. ]]; then
+            PARTS=$(echo "$DOMAIN" | tr '.' '\n' | wc -l)
+            if [[ $PARTS -gt 2 ]]; then
+              APEX_DOMAIN=$(echo "$DOMAIN" | sed 's/^[^.]*\.//')
+            else
+              APEX_DOMAIN="$DOMAIN"
+            fi
+          else
+            APEX_DOMAIN="$DOMAIN"
+          fi
+          
+          # Get nameservers from Route 53
+          ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$APEX_DOMAIN" --query 'HostedZones[0].Id' --output text 2>/dev/null | cut -d'/' -f3)
+          
+          if [[ -n "$ZONE_ID" ]] && [[ "$ZONE_ID" != "None" ]]; then
+            NAMESERVERS=$(aws route53 get-hosted-zone --id "$ZONE_ID" --query 'DelegationSet.NameServers' --output text 2>/dev/null | tr '\t' '\n')
+            
+            if [[ -n "$NAMESERVERS" ]]; then
+              echo "Route 53 Nameservers for $APEX_DOMAIN:"
+              echo "$NAMESERVERS" | sed 's/^/  - /'
+              echo ""
+              echo "ACTION REQUIRED:"
+              echo "1. Go to your domain registrar (where you bought $APEX_DOMAIN)"
+              echo "2. Update nameservers to the values above"
+              echo "3. Wait 10-30 minutes for DNS propagation"
+              echo "4. Certificate will auto-validate once DNS propagates"
+            else
+              echo "⚠️  Could not retrieve nameservers"
+            fi
+          else
+            echo "⚠️  Hosted zone not found for $APEX_DOMAIN"
+          fi
+
       # Simple smoke log (you can curl a URL here if you output one for k8s)
       - name: Smoke Log
+        if: ${{ inputs.action == 'deploy' && success() }}
         run: |
+          echo ""
+          echo "=========================================="
+          echo "🌐 Deployment URLs"
+          echo "=========================================="
           echo "Cloud: ${{ inputs.target_cloud }}"
           echo "Mode:  ${{ inputs.deployment_mode }}"
           if [ -n "${{ env.WEBSITE_URL }}" ]; then
             echo "Static site endpoint: ${{ env.WEBSITE_URL }}"
           fi
           if [ -n "${{ env.CONTAINER_URL }}" ]; then
-            echo "App Runner URL: ${{ env.CONTAINER_URL }}"
+            echo "Container URL: ${{ env.CONTAINER_URL }}"
           fi
           if [ -n "${{ env.CLUSTER_ENDPOINT }}" ]; then
-            echo "EKS API endpoint: ${{ env.CLUSTER_ENDPOINT }}"
+            echo "Kubernetes API endpoint: ${{ env.CLUSTER_ENDPOINT }}"
+          fi
+          if [[ -n "${{ inputs.domain_name }}" ]]; then
+            echo "Custom domain: ${{ inputs.domain_name }}"
+            if [[ "${{ inputs.target_cloud }}" == *"aws"* ]]; then
+              echo "  - AWS: https://aws.${{ inputs.domain_name }}"
+            fi
+            if [[ "${{ inputs.target_cloud }}" == *"azure"* ]]; then
+              echo "  - Azure: http://azure.${{ inputs.domain_name }}"
+            fi
+            if [[ "${{ inputs.target_cloud }}" == *"gcp"* ]]; then
+              echo "  - GCP: https://gcp.${{ inputs.domain_name }}"
+            fi
           fi
 
-      # Destroy resources ONLY if the pipeline fails (failure() returns true)
-      - name: Terraform Destroy (on failure)
-        if: failure()
+      # ==========================================
+      # DESTROY WORKFLOW
+      # ==========================================
+      
+      # Pre-destroy cleanup: Delete Kubernetes Ingress
+      - name: Pre-Destroy Cleanup (Kubernetes Ingress)
+        if: ${{ inputs.action == 'destroy' && inputs.deployment_mode == 'k8s' }}
+        run: |
+          if [ -f "./kubeconfig.yaml" ]; then
+            export KUBECONFIG="./kubeconfig.yaml"
+            if kubectl get ingress -n sample-app portfolio-ingress &> /dev/null; then
+              echo "Deleting Ingress to free up ALB and Certificates..."
+              kubectl delete ingress -n sample-app portfolio-ingress --ignore-not-found=true --timeout=60s || true
+              echo "Waiting for ALB cleanup..."
+              sleep 15
+            fi
+          fi
+
+      # Pre-destroy cleanup: Delete Route 53 records
+      - name: Pre-Destroy Cleanup (Route 53 Records)
+        if: ${{ inputs.action == 'destroy' && inputs.domain_name != '' && contains(inputs.target_cloud, 'aws') }}
+        run: |
+          echo "Cleaning up Route 53 records before hosted zone deletion..."
+          
+          # Extract apex domain
+          DOMAIN="${{ inputs.domain_name }}"
+          if [[ "$DOMAIN" =~ ^www\. ]]; then
+            APEX_DOMAIN="${DOMAIN#www.}"
+          elif [[ "$DOMAIN" =~ ^[^.]+\. ]]; then
+            PARTS=$(echo "$DOMAIN" | tr '.' '\n' | wc -l)
+            if [[ $PARTS -gt 2 ]]; then
+              APEX_DOMAIN=$(echo "$DOMAIN" | sed 's/^[^.]*\.//')
+            else
+              APEX_DOMAIN="$DOMAIN"
+            fi
+          else
+            APEX_DOMAIN="$DOMAIN"
+          fi
+          
+          # Find hosted zone
+          ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$APEX_DOMAIN" --query 'HostedZones[0].Id' --output text 2>/dev/null | cut -d'/' -f3)
+          
+          if [[ -n "$ZONE_ID" ]] && [[ "$ZONE_ID" != "None" ]]; then
+            echo "Found hosted zone: $ZONE_ID"
+            
+            # Get all records except NS and SOA
+            ALL_RECORDS=$(aws route53 list-resource-record-sets --hosted-zone-id "$ZONE_ID" \
+              --max-items 1000 \
+              --query "ResourceRecordSets[?Type != 'NS' && Type != 'SOA']" \
+              --output json 2>/dev/null || echo "[]")
+            
+            if command -v jq &> /dev/null; then
+              RECORD_COUNT=$(echo "$ALL_RECORDS" | jq 'length' 2>/dev/null || echo "0")
+              
+              if [[ "$RECORD_COUNT" -gt 0 ]] && [[ "$RECORD_COUNT" != "0" ]]; then
+                echo "Found $RECORD_COUNT record(s) to delete..."
+                
+                # Build change batch
+                CHANGE_BATCH=$(echo "$ALL_RECORDS" | jq '{
+                  Changes: [.[] | {
+                    Action: "DELETE",
+                    ResourceRecordSet: ({
+                      Name: .Name,
+                      Type: .Type,
+                      TTL: (.TTL // 300),
+                      ResourceRecords: (.ResourceRecords // []),
+                      AliasTarget: (.AliasTarget // empty)
+                    } | with_entries(select(.value != null and .value != [])))
+                  }]
+                }' 2>/dev/null)
+                
+                if [[ -n "$CHANGE_BATCH" ]] && [[ "$CHANGE_BATCH" != "{}" ]]; then
+                  TEMP_R53_CHANGE=$(mktemp)
+                  echo "$CHANGE_BATCH" > "$TEMP_R53_CHANGE"
+                  
+                  CHANGE_ID=$(aws route53 change-resource-record-sets \
+                    --hosted-zone-id "$ZONE_ID" \
+                    --change-batch "file://$TEMP_R53_CHANGE" \
+                    --query 'ChangeInfo.Id' \
+                    --output text 2>/dev/null || echo "")
+                  
+                  rm -f "$TEMP_R53_CHANGE"
+                  
+                  if [[ -n "$CHANGE_ID" ]]; then
+                    echo "✅ DNS records deletion initiated (Change ID: $CHANGE_ID)"
+                    echo "Waiting for deletion to complete..."
+                    for i in {1..12}; do
+                      STATUS=$(aws route53 get-change --id "$CHANGE_ID" --query 'ChangeInfo.Status' --output text 2>/dev/null || echo "PENDING")
+                      if [[ "$STATUS" == "INSYNC" ]]; then
+                        echo "✅ DNS records deleted successfully"
+                        break
+                      fi
+                      if [[ $i -eq 12 ]]; then
+                        echo "⚠️  Deletion still in progress (waited 60s). Continuing..."
+                      else
+                        sleep 5
+                      fi
+                    done
+                  else
+                    echo "⚠️  Could not delete DNS records via batch operation"
+                  fi
+                fi
+              else
+                echo "✅ No DNS records to delete"
+              fi
+            else
+              echo "⚠️  jq not available - skipping Route 53 cleanup"
+            fi
+          fi
+
+      # Terraform Destroy
+      - name: Terraform Destroy
+        if: ${{ inputs.action == 'destroy' }}
         env:
           ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
           ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
@@ -350,15 +676,129 @@ jobs:
           CLOUDS_INPUT="${{ inputs.target_cloud }}"
           TF_CLOUDS_LIST="[\"$(echo $CLOUDS_INPUT | sed 's/,/\",\"/g')\"]"
           
-          terraform destroy -auto-approve \
-            -var="target_clouds=$TF_CLOUDS_LIST" \
-            -var="deployment_mode=${{ inputs.deployment_mode }}" \
-            -var="app_image=${{ inputs.app_image }}" \
-            -var="domain_name=${{ inputs.domain_name }}" \
+          TF_DESTROY_ARGS=(
+            -auto-approve
+            -var="target_clouds=$TF_CLOUDS_LIST"
+            -var="deployment_mode=${{ inputs.deployment_mode }}"
+            -var="app_image=${{ inputs.app_image }}"
+            -var="domain_name=${{ inputs.domain_name }}"
             -var="enable_nat_gateway=${{ env.ENABLE_NAT_GATEWAY }}"
+          )
+          
+          # Add GCP project ID if GCP is in target clouds
+          if [[ "$CLOUDS_INPUT" == *"gcp"* ]] && [[ -n "${{ steps.gcp_project.outputs.project_id }}" ]]; then
+            TF_DESTROY_ARGS+=(-var="gcp_project_id=${{ steps.gcp_project.outputs.project_id }}")
+          fi
+          
+          terraform destroy "${TF_DESTROY_ARGS[@]}"
+
+      # Post-destroy cleanup: Check for remaining Route 53 records
+      - name: Post-Destroy Cleanup (Route 53 Records)
+        if: ${{ inputs.action == 'destroy' && inputs.domain_name != '' && contains(inputs.target_cloud, 'aws') }}
+        run: |
+          echo "Checking for remaining Route 53 records after destroy..."
+          
+          # Extract apex domain (same logic as pre-destroy)
+          DOMAIN="${{ inputs.domain_name }}"
+          if [[ "$DOMAIN" =~ ^www\. ]]; then
+            APEX_DOMAIN="${DOMAIN#www.}"
+          elif [[ "$DOMAIN" =~ ^[^.]+\. ]]; then
+            PARTS=$(echo "$DOMAIN" | tr '.' '\n' | wc -l)
+            if [[ $PARTS -gt 2 ]]; then
+              APEX_DOMAIN=$(echo "$DOMAIN" | sed 's/^[^.]*\.//')
+            else
+              APEX_DOMAIN="$DOMAIN"
+            fi
+          else
+            APEX_DOMAIN="$DOMAIN"
+          fi
+          
+          ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$APEX_DOMAIN" --query 'HostedZones[0].Id' --output text 2>/dev/null | cut -d'/' -f3)
+          
+          if [[ -n "$ZONE_ID" ]] && [[ "$ZONE_ID" != "None" ]]; then
+            REMAINING_RECORDS=$(aws route53 list-resource-record-sets --hosted-zone-id "$ZONE_ID" \
+              --max-items 1000 \
+              --query "ResourceRecordSets[?Type != 'NS' && Type != 'SOA']" \
+              --output json 2>/dev/null || echo "[]")
+            
+            if command -v jq &> /dev/null; then
+              REMAINING_COUNT=$(echo "$REMAINING_RECORDS" | jq 'length' 2>/dev/null || echo "0")
+              
+              if [[ "$REMAINING_COUNT" -gt 0 ]] && [[ "$REMAINING_COUNT" != "0" ]]; then
+                echo "⚠️  Found $REMAINING_COUNT remaining record(s)"
+                echo "Cleaning up..."
+                # Same cleanup logic as pre-destroy
+                CLEANUP_BATCH=$(echo "$REMAINING_RECORDS" | jq '{
+                  Changes: [.[] | {
+                    Action: "DELETE",
+                    ResourceRecordSet: ({
+                      Name: .Name,
+                      Type: .Type,
+                      TTL: (.TTL // 300),
+                      ResourceRecords: (.ResourceRecords // []),
+                      AliasTarget: (.AliasTarget // empty)
+                    } | with_entries(select(.value != null and .value != [])))
+                  }]
+                }' 2>/dev/null)
+                
+                if [[ -n "$CLEANUP_BATCH" ]] && [[ "$CLEANUP_BATCH" != "{}" ]]; then
+                  TEMP_CLEANUP=$(mktemp)
+                  echo "$CLEANUP_BATCH" > "$TEMP_CLEANUP"
+                  CLEANUP_CHANGE_ID=$(aws route53 change-resource-record-sets \
+                    --hosted-zone-id "$ZONE_ID" \
+                    --change-batch "file://$TEMP_CLEANUP" \
+                    --query 'ChangeInfo.Id' \
+                    --output text 2>/dev/null || echo "")
+                  rm -f "$TEMP_CLEANUP"
+                  
+                  if [[ -n "$CLEANUP_CHANGE_ID" ]]; then
+                    echo "✅ Remaining DNS records deleted"
+                  fi
+                fi
+              else
+                echo "✅ No remaining DNS records"
+              fi
+            fi
+          fi
+
+      # Destroy resources ONLY if the pipeline fails (failure() returns true)
+      - name: Terraform Destroy (on failure)
+        if: ${{ inputs.action == 'deploy' && failure() }}
+        env:
+          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+        run: |
+          CLOUDS_INPUT="${{ inputs.target_cloud }}"
+          TF_CLOUDS_LIST="[\"$(echo $CLOUDS_INPUT | sed 's/,/\",\"/g')\"]"
+          
+          TF_DESTROY_ARGS=(
+            -auto-approve
+            -var="target_clouds=$TF_CLOUDS_LIST"
+            -var="deployment_mode=${{ inputs.deployment_mode }}"
+            -var="app_image=${{ inputs.app_image }}"
+            -var="domain_name=${{ inputs.domain_name }}"
+            -var="enable_nat_gateway=${{ env.ENABLE_NAT_GATEWAY }}"
+          )
+          
+          # Add GCP project ID if GCP is in target clouds
+          if [[ "$CLOUDS_INPUT" == *"gcp"* ]] && [[ -n "${{ steps.gcp_project.outputs.project_id }}" ]]; then
+            TF_DESTROY_ARGS+=(-var="gcp_project_id=${{ steps.gcp_project.outputs.project_id }}")
+          fi
+          
+          terraform destroy "${TF_DESTROY_ARGS[@]}"
 
       - name: Publish Metrics
+        if: always()
         run: |
-          echo "--- FINAL METRICS ---"
-          echo "Cloud: ${{ inputs.target_cloud }}, Mode: ${{ inputs.deployment_mode }}"
-          echo "Provisioning Time (s): ${{ steps.time_provisioning.outputs.duration }}"
+          echo "=========================================="
+          echo "📊 Final Metrics"
+          echo "=========================================="
+          echo "Action: ${{ inputs.action }}"
+          echo "Cloud: ${{ inputs.target_cloud }}"
+          echo "Mode: ${{ inputs.deployment_mode }}"
+          if [[ "${{ inputs.action }}" == "deploy" ]] && [[ -n "${{ steps.time_provisioning.outputs.duration }}" ]]; then
+            echo "Provisioning Time: ${{ steps.time_provisioning.outputs.duration }} seconds"
+          fi
+          echo "Status: ${{ job.status }}"
