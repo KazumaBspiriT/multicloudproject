@@ -297,7 +297,7 @@ resource "aws_apprunner_custom_domain_association" "domain" {
 # ACM Certificate for aws. subdomain
 resource "aws_acm_certificate" "aws_subdomain" {
   count             = var.domain_name != "" ? 1 : 0
-  domain_name      = "aws.${var.domain_name}"
+  domain_name      = "aws.${local.apex_domain}"
   validation_method = "DNS"
 
   lifecycle {
@@ -328,15 +328,26 @@ resource "aws_route53_record" "aws_subdomain_cert_validation" {
   ]
 }
 
+# Wait for certificate validation before associating with App Runner
+resource "aws_acm_certificate_validation" "aws_subdomain" {
+  count           = var.domain_name != "" ? 1 : 0
+  certificate_arn = aws_acm_certificate.aws_subdomain[0].arn
+  validation_record_fqdns = [aws_route53_record.aws_subdomain_cert_validation[0].fqdn]
+
+  timeouts {
+    create = "30m" # Allow time for DNS propagation
+  }
+}
+
 # Associate aws. subdomain with App Runner
 resource "aws_apprunner_custom_domain_association" "aws_subdomain" {
   count                = var.domain_name != "" ? 1 : 0
-  domain_name          = "aws.${var.domain_name}"
+  domain_name          = "aws.${local.apex_domain}"
   service_arn          = aws_apprunner_service.app.arn
   enable_www_subdomain = false
 
   depends_on = [
-    aws_acm_certificate.aws_subdomain,
+    aws_acm_certificate_validation.aws_subdomain,
     aws_route53_record.aws_subdomain_cert_validation,
     null_resource.update_nameservers
   ]
