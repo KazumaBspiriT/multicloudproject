@@ -8,7 +8,8 @@ Deploy containerized applications across AWS, Azure, and GCP using Terraform and
 ```bash
 # 1. Install prerequisites (see Prerequisites section below)
 # 2. Configure cloud credentials (AWS, GCP, Azure)
-# 3. Run deployment script
+# 3. For static mode: Add your HTML files to static-app-content/ folder (see Static Content Preparation section)
+# 4. Run deployment script
 ./deploy.sh
 ```
 
@@ -145,6 +146,36 @@ Add all four values to GitHub Secrets.
 
 ### Local Deployment
 
+#### Static Content Preparation (for Static Mode)
+
+**Before deploying in static mode**, prepare your static website files:
+
+1. **Create or use the `static-app-content/` directory** in the project root:
+   ```bash
+   mkdir -p static-app-content
+   ```
+
+2. **Add your static files** (HTML, CSS, JS, images, etc.):
+   ```bash
+   # Required: index.html (main page)
+   # Optional: 404.html (error page), CSS, JS, images, etc.
+   ```
+
+3. **Example structure**:
+   ```
+   static-app-content/
+   ├── index.html      # Required: Main page
+   ├── 404.html        # Optional: Error page
+   ├── styles.css      # Optional: Styles
+   ├── script.js       # Optional: JavaScript
+   └── images/         # Optional: Images folder
+       └── logo.png
+   ```
+
+4. **Note**: The script will automatically create the directory and a sample `index.html` if missing, but you should replace it with your own content.
+
+**Important**: All files in `static-app-content/` will be uploaded to all three clouds (AWS S3, Azure Storage, GCP Storage).
+
 #### Interactive Mode
 ```bash
 ./deploy.sh
@@ -253,6 +284,7 @@ The validation step runs automatically at the start of the pipeline and will sho
 - Target Cloud: `aws,gcp,azure`
 - Deployment Mode: `static`
 - Custom Domain: `example.com`
+- **Note**: Ensure `static-app-content/` folder exists with your `index.html` and other static files before running
 
 **Destroy all resources:**
 - Action: `destroy`
@@ -337,10 +369,80 @@ This allows you to access the same application deployed across all three clouds 
 - **GCP**: Cloud Storage Bucket (static website)
 - **Azure**: Storage Account (static website)
 - **Content**: Serves files from `static-app-content/` directory
+  - **Required**: `index.html` (main page)
+  - **Optional**: `404.html` (error page), CSS, JS, images, etc.
+  - **Location**: Place all static files in `static-app-content/` folder before deployment
+  - **Auto-creation**: Directory is created automatically if missing (with sample content)
+  - **SPA Routing**: Already configured to serve `index.html` for all routes (supports client-side routing)
+
+## 🛣️ Application Routing
+
+### How Routes Work
+
+When you deploy a containerized application with multiple routes (e.g., `/cv`, `/achievements`, `/projects`), here's how each deployment mode handles them:
+
+#### Kubernetes Mode (EKS/GKE)
+- **Ingress Configuration**: Uses `pathType: Prefix` with `path: /`, which forwards **all paths** to your application
+- **Application Routing**: Your containerized application (Express.js, Flask, React, etc.) handles all route logic
+- **Example**: 
+  - `https://yourdomain.com/` → Your app
+  - `https://yourdomain.com/cv` → Your app (handled by app routing)
+  - `https://yourdomain.com/achievements` → Your app (handled by app routing)
+- **Works with**: Server-side routing (Express, Flask, Django) and client-side routing (React Router, Vue Router)
+
+#### Container Mode (App Runner/Cloud Run/ACI)
+- **Request Forwarding**: All HTTP requests are forwarded directly to your container
+- **Application Routing**: Your application handles all route logic internally
+- **Example**:
+  - `https://aws.yourdomain.com/cv` → Container receives `/cv` path
+  - `https://gcp.yourdomain.com/achievements` → Container receives `/achievements` path
+- **Works with**: Any application framework that handles routing
+
+#### Static Mode
+- **File Serving**: Only serves static files (HTML, CSS, JS, images)
+- **Client-Side Routing**: If using a Single Page Application (SPA) with client-side routing (React Router, Vue Router), you need to:
+  - Configure your static hosting to serve `index.html` for all routes (404 fallback)
+  - This is already configured for AWS (CloudFront), Azure, and GCP
+- **Example**:
+  - `https://aws.yourdomain.com/` → `index.html`
+  - `https://aws.yourdomain.com/cv` → `index.html` (SPA handles routing client-side)
+  - `https://aws.yourdomain.com/achievements` → `index.html` (SPA handles routing client-side)
+
+### Important Notes
+
+1. **Server-Side Routing**: For applications with server-side routing (Express.js, Flask, Django), routes work automatically in **K8s** and **Container** modes
+2. **Client-Side Routing (SPAs)**: For React/Vue/Angular apps with client-side routing:
+   - **Static Mode**: Already configured to serve `index.html` for all routes (404 fallback)
+   - **Container/K8s Mode**: Your app server (nginx, Express, etc.) must be configured to serve `index.html` for all routes
+3. **Path Prefix**: The current Ingress uses `pathType: Prefix` with `path: /`, which correctly forwards all paths to your application
+
+### Example: Portfolio Application
+
+If you deploy a portfolio app with routes like:
+- `/` (home)
+- `/cv` (resume)
+- `/achievements` (awards)
+- `/projects` (portfolio items)
+
+**All routes will work automatically** in K8s and Container modes because:
+- The load balancer/ingress forwards all requests to your container
+- Your application (Express, Flask, React, etc.) handles the routing logic
+- No additional configuration needed
 
 ## 🔧 Troubleshooting
 
 ### Common Issues
+
+#### Routes Not Working (404 Errors)
+- **Symptom**: Routes like `/cv`, `/achievements` return 404
+- **For Container/K8s Mode**:
+  - Check that your application handles these routes correctly
+  - Verify your app server (Express, Flask, etc.) is configured to handle all paths
+  - For SPAs: Ensure your server serves `index.html` for all routes (not just `/`)
+- **For Static Mode**:
+  - Ensure your SPA is configured for client-side routing
+  - CloudFront/Azure/GCP are already configured to serve `index.html` for 404s
+  - Check browser console for JavaScript errors
 
 #### DNS Not Resolving
 - **Symptom**: Domain/subdomain not accessible
