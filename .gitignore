@@ -26,3 +26,6 @@ gcp-key.json
 kubeconfig.yaml
 tfplan.out
 gke_gcloud_auth_plugin_cache
+
+# Cursor IDE
+.cursor/
