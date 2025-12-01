@@ -46,6 +46,12 @@ resource "google_container_cluster" "primary" {
 
   network    = google_compute_network.vpc.name
   subnetwork = google_compute_subnetwork.subnet.name
+
+  # Ignore version changes to prevent Terraform from trying to "downgrade" 
+  # when GKE uses full version strings (e.g., 1.31.13-gke.1023000) vs our config (1.31)
+  lifecycle {
+    ignore_changes = [min_master_version]
+  }
 }
 
 # 4. Managed Node Pool
@@ -71,6 +77,12 @@ resource "google_container_node_pool" "primary_nodes" {
     oauth_scopes = [
       "https://www.googleapis.com/auth/cloud-platform"
     ]
+  }
+
+  # Ignore version changes to prevent Terraform from trying to "downgrade" 
+  # when GKE uses full version strings vs our config
+  lifecycle {
+    ignore_changes = [version]
   }
 }
 

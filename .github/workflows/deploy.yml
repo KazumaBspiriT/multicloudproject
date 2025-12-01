@@ -483,7 +483,14 @@ jobs:
           EXTRA_VARS="deployment_mode=${{ inputs.deployment_mode }} app_image=${{ inputs.app_image }} domain_name=${{ inputs.domain_name }} target_clouds=aws acm_certificate_arn=${{ env.ACM_CERT_ARN }} eks_cluster_name=${{ env.EKS_CLUSTER_NAME }} eks_vpc_id=${{ env.EKS_VPC_ID }} aws_region=${{ env.AWS_REGION }} eks_lb_role_arn=${{ env.EKS_LB_ROLE_ARN }}"
           
           echo "Running Ansible for EKS (AWS) with ALB/Domain support..."
+          AWS_ANSIBLE_START=$(date +%s)
           ansible-playbook -i ansible/inventory.yml ansible/playbook.yml --extra-vars "$EXTRA_VARS"
+          AWS_ANSIBLE_END=$(date +%s)
+          AWS_ANSIBLE_DURATION=$((AWS_ANSIBLE_END - AWS_ANSIBLE_START))
+          AWS_ANSIBLE_MIN=$((AWS_ANSIBLE_DURATION / 60))
+          AWS_ANSIBLE_SEC=$((AWS_ANSIBLE_DURATION % 60))
+          echo "AWS_ANSIBLE_TIME=${AWS_ANSIBLE_MIN}m ${AWS_ANSIBLE_SEC}s" >> $GITHUB_ENV
+          echo "✅ AWS (EKS) Ansible deployment completed in ${AWS_ANSIBLE_MIN}m ${AWS_ANSIBLE_SEC}s"
 
       - name: Configure Kubeconfig for GKE (GCP)
         if: ${{ inputs.action == 'deploy' && contains(inputs.target_cloud, 'gcp') && inputs.deployment_mode == 'k8s' }}
@@ -507,6 +514,12 @@ jobs:
             fi
             
             echo "Using GCP Project: $GCP_PROJECT"
+            
+            # Ensure service account is properly activated for cluster access
+            echo "Activating service account for GKE access..."
+            echo '${{ secrets.GCP_SA_KEY }}' > /tmp/gcp-sa-key.json
+            gcloud auth activate-service-account --key-file=/tmp/gcp-sa-key.json
+            gcloud config set project "$GCP_PROJECT"
             
             # Install gke-gcloud-auth-plugin if not present (required for GKE kubectl authentication)
             if ! command -v gke-gcloud-auth-plugin &> /dev/null; then
@@ -615,7 +628,14 @@ jobs:
           EXTRA_VARS="deployment_mode=${{ inputs.deployment_mode }} app_image=${{ inputs.app_image }} domain_name= target_clouds=gcp"
           
           echo "Running Ansible for GKE (GCP) with LoadBalancer service (no domain, no ALB)..."
+          GCP_ANSIBLE_START=$(date +%s)
           ansible-playbook -i ansible/inventory.yml ansible/playbook.yml --extra-vars "$EXTRA_VARS"
+          GCP_ANSIBLE_END=$(date +%s)
+          GCP_ANSIBLE_DURATION=$((GCP_ANSIBLE_END - GCP_ANSIBLE_START))
+          GCP_ANSIBLE_MIN=$((GCP_ANSIBLE_DURATION / 60))
+          GCP_ANSIBLE_SEC=$((GCP_ANSIBLE_DURATION % 60))
+          echo "GCP_ANSIBLE_TIME=${GCP_ANSIBLE_MIN}m ${GCP_ANSIBLE_SEC}s" >> $GITHUB_ENV
+          echo "✅ GCP (GKE) Ansible deployment completed in ${GCP_ANSIBLE_MIN}m ${GCP_ANSIBLE_SEC}s"
 
       - name: Configure Kubeconfig for AKS (Azure)
         if: ${{ inputs.action == 'deploy' && contains(inputs.target_cloud, 'azure') && inputs.deployment_mode == 'k8s' }}
@@ -633,19 +653,19 @@ jobs:
               echo "⚠️  Kubeconfig exists with other cloud entries. Using separate file for AKS..."
               AKS_KUBECONFIG="${{ github.workspace }}/kubeconfig-aks.yaml"
               
-              # Fetch AKS credentials to separate file
-              az aks get-credentials --resource-group "$AKS_RG" --name "$AKS_NAME" --file "$AKS_KUBECONFIG" --overwrite-existing
+              # Fetch AKS credentials to separate file (using --admin flag for admin access)
+              az aks get-credentials --resource-group "$AKS_RG" --name "$AKS_NAME" --file "$AKS_KUBECONFIG" --overwrite-existing --admin
               chmod 600 "$AKS_KUBECONFIG"
               
               # Use both kubeconfigs via KUBECONFIG env var (kubectl will merge them automatically)
               export KUBECONFIG="$KUBECONFIG_PATH:$AKS_KUBECONFIG"
-              echo "✅ AKS kubeconfig configured (using multi-file kubeconfig)"
+              echo "✅ AKS kubeconfig configured (using multi-file kubeconfig with admin access)"
             else
-              # Single cloud or no existing kubeconfig - use directly
-              az aks get-credentials --resource-group "$AKS_RG" --name "$AKS_NAME" --file "$KUBECONFIG_PATH" --overwrite-existing
+              # Single cloud or no existing kubeconfig - use directly (using --admin flag for admin access)
+              az aks get-credentials --resource-group "$AKS_RG" --name "$AKS_NAME" --file "$KUBECONFIG_PATH" --overwrite-existing --admin
               chmod 600 "$KUBECONFIG_PATH"
               export KUBECONFIG="$KUBECONFIG_PATH"
-              echo "✅ AKS kubeconfig configured"
+              echo "✅ AKS kubeconfig configured (with admin access)"
             fi
             
             # Verify kubeconfig is valid and has proper authentication
@@ -722,7 +742,14 @@ jobs:
           EXTRA_VARS="deployment_mode=${{ inputs.deployment_mode }} app_image=${{ inputs.app_image }} domain_name= target_clouds=azure"
           
           echo "Running Ansible for AKS (Azure) with LoadBalancer service (no domain, no ALB)..."
+          AZURE_ANSIBLE_START=$(date +%s)
           ansible-playbook -i ansible/inventory.yml ansible/playbook.yml --extra-vars "$EXTRA_VARS"
+          AZURE_ANSIBLE_END=$(date +%s)
+          AZURE_ANSIBLE_DURATION=$((AZURE_ANSIBLE_END - AZURE_ANSIBLE_START))
+          AZURE_ANSIBLE_MIN=$((AZURE_ANSIBLE_DURATION / 60))
+          AZURE_ANSIBLE_SEC=$((AZURE_ANSIBLE_DURATION % 60))
+          echo "AZURE_ANSIBLE_TIME=${AZURE_ANSIBLE_MIN}m ${AZURE_ANSIBLE_SEC}s" >> $GITHUB_ENV
+          echo "✅ Azure (AKS) Ansible deployment completed in ${AZURE_ANSIBLE_MIN}m ${AZURE_ANSIBLE_SEC}s"
 
       - name: Measure Provisioning Time
         if: ${{ inputs.action == 'deploy' }}
@@ -1336,12 +1363,40 @@ jobs:
         if: always()
         run: |
           echo "=========================================="
-          echo "📊 Final Metrics"
+          echo "📊 Final Metrics & Timing Summary"
           echo "=========================================="
           echo "Action: ${{ inputs.action }}"
           echo "Cloud: ${{ inputs.target_cloud }}"
           echo "Mode: ${{ inputs.deployment_mode }}"
-          if [[ "${{ inputs.action }}" == "deploy" ]] && [[ -n "${{ steps.time_provisioning.outputs.duration }}" ]]; then
-            echo "Provisioning Time: ${{ steps.time_provisioning.outputs.duration }} seconds"
+          
+          if [[ "${{ inputs.action }}" == "deploy" ]]; then
+            echo ""
+            echo "⏱️  Deployment Timing:"
+            echo "----------------------------------------"
+            
+            if [[ -n "${{ env.TERRAFORM_TIME }}" ]]; then
+              echo "  Terraform Infrastructure: ${{ env.TERRAFORM_TIME }}"
+            fi
+            
+            if [[ "${{ inputs.deployment_mode }}" == "k8s" ]]; then
+              if [[ "${{ inputs.target_cloud }}" == *"aws"* ]] && [[ -n "${{ env.AWS_ANSIBLE_TIME }}" ]]; then
+                echo "  AWS (EKS) Ansible: ${{ env.AWS_ANSIBLE_TIME }}"
+              fi
+              if [[ "${{ inputs.target_cloud }}" == *"gcp"* ]] && [[ -n "${{ env.GCP_ANSIBLE_TIME }}" ]]; then
+                echo "  GCP (GKE) Ansible: ${{ env.GCP_ANSIBLE_TIME }}"
+              fi
+              if [[ "${{ inputs.target_cloud }}" == *"azure"* ]] && [[ -n "${{ env.AZURE_ANSIBLE_TIME }}" ]]; then
+                echo "  Azure (AKS) Ansible: ${{ env.AZURE_ANSIBLE_TIME }}"
+              fi
+            fi
+            
+            if [[ -n "${{ steps.time_provisioning.outputs.duration }}" ]]; then
+              TOTAL_SEC=${{ steps.time_provisioning.outputs.duration }}
+              TOTAL_MIN=$((TOTAL_SEC / 60))
+              TOTAL_REMAINING_SEC=$((TOTAL_SEC % 60))
+              echo "  Total Deployment Time: ${TOTAL_MIN}m ${TOTAL_REMAINING_SEC}s"
+            fi
           fi
+          
+          echo ""
           echo "Status: ${{ job.status }}"

@@ -1353,6 +1353,10 @@ if [[ "$CLOUDS_INPUT" == *"gcp"* ]]; then
   TF_CMD_ARGS+=(-var "gcp_project_id=$PROJECT_ID")
 fi
 
+# Start timing for Terraform apply
+TERRAFORM_START=$(date +%s)
+echo -e "${BLUE}Starting Terraform apply...${NC}"
+
 if ! terraform apply -auto-approve "${TF_CMD_ARGS[@]}"; then
   rm -f "$TEMP_TFVARS"
   echo -e "\n${RED}=========================================="
@@ -1362,6 +1366,11 @@ if ! terraform apply -auto-approve "${TF_CMD_ARGS[@]}"; then
   exit 1
 fi
 
+TERRAFORM_END=$(date +%s)
+TERRAFORM_DURATION=$((TERRAFORM_END - TERRAFORM_START))
+TERRAFORM_MINUTES=$((TERRAFORM_DURATION / 60))
+TERRAFORM_SECONDS=$((TERRAFORM_DURATION % 60))
+
 # Clean up temporary file
 rm -f "$TEMP_TFVARS"
 
@@ -1370,6 +1379,14 @@ if [[ "$MODE" == "k8s" ]]; then
   echo -e "\n${BLUE}[3/3] Configuring Kubernetes Cluster (Ansible)...${NC}"
   
   export KUBECONFIG="./kubeconfig.yaml"
+  
+  # Initialize timing variables for each cloud
+  AWS_ANSIBLE_START=0
+  AWS_ANSIBLE_END=0
+  GCP_ANSIBLE_START=0
+  GCP_ANSIBLE_END=0
+  AZURE_ANSIBLE_START=0
+  AZURE_ANSIBLE_END=0
 
   # For GCP, fetch credentials manually to generate kubeconfig
   if [[ "$CLOUDS_INPUT" == *"gcp"* ]]; then
@@ -1430,8 +1447,14 @@ if [[ "$MODE" == "k8s" ]]; then
     fi
   fi
 
+  # Start timing for Ansible deployment
+  ANSIBLE_START=$(date +%s)
   ansible-playbook -i ansible/inventory.yml ansible/playbook.yml \
     --extra-vars "deployment_mode=$MODE app_image=$IMAGE domain_name=$DOMAIN_NAME target_clouds=$CLOUDS_INPUT acm_certificate_arn=$ACM_CERT_ARN eks_cluster_name=$EKS_CLUSTER_NAME eks_vpc_id=$EKS_VPC_ID aws_region=$REGION eks_lb_role_arn=$EKS_LB_ROLE_ARN"
+  ANSIBLE_END=$(date +%s)
+  ANSIBLE_DURATION=$((ANSIBLE_END - ANSIBLE_START))
+  ANSIBLE_MINUTES=$((ANSIBLE_DURATION / 60))
+  ANSIBLE_SECONDS=$((ANSIBLE_DURATION % 60))
 
   # 4a. Automate Route 53 Alias Record Update (for EKS/ALB)
   if [[ "$MODE" == "k8s" ]] && [[ "$CLOUDS_INPUT" == *"aws"* ]] && [[ -n "$DOMAIN_NAME" ]]; then
@@ -1533,9 +1556,47 @@ fi
 
 # 5. Show Outputs (only if terraform succeeded)
 if terraform output >/dev/null 2>&1; then
-  echo -e "\n${GREEN}--------------------------------------"
+  # Calculate total deployment time
+  TOTAL_DURATION=$((TERRAFORM_END - TERRAFORM_START))
+  if [[ "$MODE" == "k8s" ]]; then
+    TOTAL_DURATION=$((ANSIBLE_END - TERRAFORM_START))
+  fi
+  TOTAL_MINUTES=$((TOTAL_DURATION / 60))
+  TOTAL_SECONDS=$((TOTAL_DURATION % 60))
+  
+  echo -e "\n${GREEN}=========================================="
   echo "Deployment Complete!"
-  echo -e "--------------------------------------${NC}"
+  echo -e "==========================================${NC}"
+  
+  # Print deployment timing summary
+  echo -e "\n${BLUE}⏱️  Deployment Timing Summary${NC}"
+  echo -e "${BLUE}==========================================${NC}"
+  echo -e "${GREEN}Terraform Infrastructure:${NC}"
+  echo -e "  Duration: ${TERRAFORM_MINUTES}m ${TERRAFORM_SECONDS}s"
+  
+  if [[ "$MODE" == "k8s" ]]; then
+    echo -e "${GREEN}Kubernetes Configuration (Ansible):${NC}"
+    echo -e "  Duration: ${ANSIBLE_MINUTES}m ${ANSIBLE_SECONDS}s"
+    
+    # Break down by cloud if multiple clouds
+    if [[ "$CLOUDS_INPUT" == *","* ]]; then
+      echo -e "\n${BLUE}Per-Cloud Breakdown:${NC}"
+      if [[ "$CLOUDS_INPUT" == *"aws"* ]]; then
+        echo -e "  ${GREEN}AWS (EKS):${NC} Included in Terraform + Ansible"
+      fi
+      if [[ "$CLOUDS_INPUT" == *"gcp"* ]]; then
+        echo -e "  ${GREEN}GCP (GKE):${NC} Included in Terraform + Ansible"
+      fi
+      if [[ "$CLOUDS_INPUT" == *"azure"* ]]; then
+        echo -e "  ${GREEN}Azure (AKS):${NC} Included in Terraform + Ansible"
+      fi
+    fi
+  fi
+  
+  echo -e "\n${GREEN}Total Deployment Time:${NC}"
+  echo -e "  Duration: ${TOTAL_MINUTES}m ${TOTAL_SECONDS}s"
+  echo -e "${BLUE}==========================================${NC}"
+  
   terraform output
 else
   echo -e "\n${RED}--------------------------------------"
