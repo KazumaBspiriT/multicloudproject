@@ -357,25 +357,7 @@ jobs:
             fi
           fi
 
-      - name: Configure Kubeconfig for GKE
-        if: ${{ inputs.action == 'deploy' && contains(inputs.target_cloud, 'gcp') && inputs.deployment_mode == 'k8s' }}
-        run: |
-          # Retrieve credentials using the cluster name from Terraform outputs
-          # Assumes 'setup-gcloud' has already configured the project from credentials or default
-          gcloud container clusters get-credentials "${{ env.GKE_NAME }}" --region "us-central1"
-          # Copy default config to kubeconfig.yaml for Ansible
-          cp $HOME/.kube/config ./kubeconfig.yaml
-
-      - name: Measure Provisioning Time
-        if: ${{ inputs.action == 'deploy' }}
-        id: time_provisioning
-        run: |
-          end=$(date +%s)
-          start=${{ steps.timer_start.outputs.start }}
-          echo "duration=$((end - start))" >> "$GITHUB_OUTPUT"
-          echo "Provisioning Time: $((end - start)) seconds"
-
-      # ---- Ansible only for k8s mode (if you actually have these files) ----
+      # ---- Ansible setup (must be before running Ansible) ----
       - name: Setup Python and Ansible
         if: ${{ inputs.action == 'deploy' && inputs.deployment_mode == 'k8s' }}
         uses: actions/setup-python@v5
@@ -400,20 +382,23 @@ jobs:
           pip install ansible kubernetes openshift jmespath
           ansible-galaxy collection install kubernetes.core community.general
 
-      - name: Debug - List Files
-        if: ${{ inputs.deployment_mode == 'k8s' }}
+      # Configure kubeconfig for each cloud and run Ansible separately
+      # This ensures ALB/domain is only configured for AWS, not GCP/Azure
+      
+      - name: Configure Kubeconfig for EKS (AWS)
+        if: ${{ inputs.action == 'deploy' && contains(inputs.target_cloud, 'aws') && inputs.deployment_mode == 'k8s' }}
         run: |
-          echo "Listing root directory:"
-          ls -la
-          if [ -f kubeconfig.yaml ]; then
-            echo "kubeconfig.yaml found!"
-            head -n 5 kubeconfig.yaml
+          echo "Configuring kubeconfig for EKS (AWS)..."
+          if [[ -n "${{ env.EKS_CLUSTER_NAME }}" ]]; then
+            aws eks update-kubeconfig --region "${{ env.AWS_REGION }}" --name "${{ env.EKS_CLUSTER_NAME }}" --kubeconfig ./kubeconfig.yaml
+            chmod 600 ./kubeconfig.yaml
+            echo "✅ EKS kubeconfig configured"
           else
-            echo "kubeconfig.yaml NOT found!"
+            echo "⚠️  EKS cluster name not found in outputs"
           fi
 
-      - name: Run Ansible (K8s Mode)
-        if: ${{ inputs.action == 'deploy' && inputs.deployment_mode == 'k8s' }}
+      - name: Run Ansible for EKS (AWS with ALB/Domain)
+        if: ${{ inputs.action == 'deploy' && contains(inputs.target_cloud, 'aws') && inputs.deployment_mode == 'k8s' }}
         env:
           KUBECONFIG: kubeconfig.yaml
         run: |
@@ -422,18 +407,84 @@ jobs:
             exit 0
           fi
           
-          # Build extra-vars, only include AWS-specific vars if AWS is in target clouds
-          EXTRA_VARS="deployment_mode=${{ inputs.deployment_mode }} app_image=${{ inputs.app_image }} domain_name=${{ inputs.domain_name }} target_clouds=${{ inputs.target_cloud }}"
+          # For AWS, include domain and AWS-specific vars (ALB will be installed)
+          EXTRA_VARS="deployment_mode=${{ inputs.deployment_mode }} app_image=${{ inputs.app_image }} domain_name=${{ inputs.domain_name }} target_clouds=aws acm_certificate_arn=${{ env.ACM_CERT_ARN }} eks_cluster_name=${{ env.EKS_CLUSTER_NAME }} eks_vpc_id=${{ env.EKS_VPC_ID }} aws_region=${{ env.AWS_REGION }} eks_lb_role_arn=${{ env.EKS_LB_ROLE_ARN }}"
           
-          # Add AWS-specific vars only if AWS is in target clouds
-          if [[ "${{ inputs.target_cloud }}" == *"aws"* ]]; then
-            EXTRA_VARS="$EXTRA_VARS acm_certificate_arn=${{ env.ACM_CERT_ARN }} eks_cluster_name=${{ env.EKS_CLUSTER_NAME }} eks_vpc_id=${{ env.EKS_VPC_ID }} aws_region=${{ env.AWS_REGION }} eks_lb_role_arn=${{ env.EKS_LB_ROLE_ARN }}"
-          fi
-          
+          echo "Running Ansible for EKS (AWS) with ALB/Domain support..."
           ansible-playbook -i ansible/inventory.yml ansible/playbook.yml --extra-vars "$EXTRA_VARS"
 
-      - name: Update Route 53 DNS (Auto)
-        if: ${{ inputs.action == 'deploy' && inputs.deployment_mode == 'k8s' && inputs.target_cloud == 'aws' && inputs.domain_name != '' }}
+      - name: Configure Kubeconfig for GKE (GCP)
+        if: ${{ inputs.action == 'deploy' && contains(inputs.target_cloud, 'gcp') && inputs.deployment_mode == 'k8s' }}
+        run: |
+          echo "Configuring kubeconfig for GKE (GCP)..."
+          if [[ -n "${{ env.GKE_NAME }}" ]]; then
+            gcloud container clusters get-credentials "${{ env.GKE_NAME }}" --region "us-central1"
+            # Copy default config to kubeconfig.yaml for Ansible
+            cp $HOME/.kube/config ./kubeconfig.yaml
+            chmod 600 ./kubeconfig.yaml
+            echo "✅ GKE kubeconfig configured"
+          else
+            echo "⚠️  GKE cluster name not found in outputs"
+          fi
+
+      - name: Run Ansible for GKE (GCP - LoadBalancer only, no domain)
+        if: ${{ inputs.action == 'deploy' && contains(inputs.target_cloud, 'gcp') && inputs.deployment_mode == 'k8s' }}
+        env:
+          KUBECONFIG: kubeconfig.yaml
+        run: |
+          if [ ! -f ansible/inventory.yml ] || [ ! -f ansible/playbook.yml ]; then
+            echo "Ansible files not present, skipping."
+            exit 0
+          fi
+          
+          # For GCP, no domain, no AWS vars - just LoadBalancer service (no ALB, no Ingress)
+          EXTRA_VARS="deployment_mode=${{ inputs.deployment_mode }} app_image=${{ inputs.app_image }} domain_name= target_clouds=gcp"
+          
+          echo "Running Ansible for GKE (GCP) with LoadBalancer service (no domain, no ALB)..."
+          ansible-playbook -i ansible/inventory.yml ansible/playbook.yml --extra-vars "$EXTRA_VARS"
+
+      - name: Configure Kubeconfig for AKS (Azure)
+        if: ${{ inputs.action == 'deploy' && contains(inputs.target_cloud, 'azure') && inputs.deployment_mode == 'k8s' }}
+        run: |
+          echo "Configuring kubeconfig for AKS (Azure)..."
+          AKS_NAME=$(terraform output -raw aks_cluster_name 2>/dev/null || echo "")
+          AKS_RG=$(terraform output -raw aks_resource_group_name 2>/dev/null || echo "")
+          
+          if [[ -n "$AKS_NAME" ]] && [[ -n "$AKS_RG" ]]; then
+            az aks get-credentials --resource-group "$AKS_RG" --name "$AKS_NAME" --file ./kubeconfig.yaml --overwrite-existing
+            chmod 600 ./kubeconfig.yaml
+            echo "✅ AKS kubeconfig configured"
+          else
+            echo "⚠️  AKS cluster name or resource group not found in outputs"
+          fi
+
+      - name: Run Ansible for AKS (Azure - LoadBalancer only, no domain)
+        if: ${{ inputs.action == 'deploy' && contains(inputs.target_cloud, 'azure') && inputs.deployment_mode == 'k8s' }}
+        env:
+          KUBECONFIG: kubeconfig.yaml
+        run: |
+          if [ ! -f ansible/inventory.yml ] || [ ! -f ansible/playbook.yml ]; then
+            echo "Ansible files not present, skipping."
+            exit 0
+          fi
+          
+          # For Azure, no domain, no AWS vars - just LoadBalancer service (no ALB, no Ingress)
+          EXTRA_VARS="deployment_mode=${{ inputs.deployment_mode }} app_image=${{ inputs.app_image }} domain_name= target_clouds=azure"
+          
+          echo "Running Ansible for AKS (Azure) with LoadBalancer service (no domain, no ALB)..."
+          ansible-playbook -i ansible/inventory.yml ansible/playbook.yml --extra-vars "$EXTRA_VARS"
+
+      - name: Measure Provisioning Time
+        if: ${{ inputs.action == 'deploy' }}
+        id: time_provisioning
+        run: |
+          end=$(date +%s)
+          start=${{ steps.timer_start.outputs.start }}
+          echo "duration=$((end - start))" >> "$GITHUB_OUTPUT"
+          echo "Provisioning Time: $((end - start)) seconds"
+
+      - name: Update Route 53 DNS (Auto - AWS only)
+        if: ${{ inputs.action == 'deploy' && inputs.deployment_mode == 'k8s' && contains(inputs.target_cloud, 'aws') && inputs.domain_name != '' }}
         env:
           KUBECONFIG: kubeconfig.yaml
           DOMAIN_NAME: ${{ inputs.domain_name }}
