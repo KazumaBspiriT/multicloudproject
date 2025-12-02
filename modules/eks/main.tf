@@ -121,6 +121,126 @@ resource "aws_route53_zone" "domain" {
   }
 }
 
+# Cleanup all records before hosted zone deletion
+# This null_resource runs during destroy to delete all records except NS and SOA
+resource "null_resource" "cleanup_route53_records" {
+  count = var.domain_name != "" && length(aws_route53_zone.domain) > 0 ? 1 : 0
+
+  # Store zone ID and domain name for destroy-time cleanup
+  triggers = {
+    zone_id    = aws_route53_zone.domain[0].zone_id
+    domain_name = local.apex_domain
+  }
+
+  # Delete all records except NS and SOA before hosted zone is destroyed
+  provisioner "local-exec" {
+    when    = destroy
+    command = <<-EOT
+      set -e
+      # Try to get zone ID from trigger first, fallback to lookup by domain name
+      ZONE_ID="${self.triggers.zone_id}"
+      DOMAIN_NAME="${self.triggers.domain_name}"
+      
+      # If zone ID is empty or invalid, try to look it up by domain name
+      if [ -z "$ZONE_ID" ] || [ "$ZONE_ID" = "None" ] || [ "$ZONE_ID" = "placeholder" ]; then
+        if [ -n "$DOMAIN_NAME" ]; then
+          ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$DOMAIN_NAME" --query 'HostedZones[0].Id' --output text 2>/dev/null | cut -d'/' -f3 || echo "")
+        fi
+      fi
+      
+      if [ -z "$ZONE_ID" ] || [ "$ZONE_ID" = "None" ]; then
+        echo "No zone ID found, skipping cleanup"
+        exit 0
+      fi
+      
+      echo "Cleaning up Route 53 records in zone: $ZONE_ID"
+      
+      # Get all records except NS and SOA
+      ALL_RECORDS=$(aws route53 list-resource-record-sets \
+        --hosted-zone-id "$ZONE_ID" \
+        --max-items 1000 \
+        --query "ResourceRecordSets[?Type != 'NS' && Type != 'SOA']" \
+        --output json 2>/dev/null || echo "[]")
+      
+      # Check if jq is available
+      if ! command -v jq &> /dev/null; then
+        echo "jq not available, attempting cleanup with basic tools..."
+        RECORD_COUNT=$(echo "$ALL_RECORDS" | grep -c "Name" || echo "0")
+      else
+        RECORD_COUNT=$(echo "$ALL_RECORDS" | jq 'length' 2>/dev/null || echo "0")
+      fi
+      
+      if [ "$RECORD_COUNT" = "0" ] || [ -z "$RECORD_COUNT" ]; then
+        echo "No records to delete (only NS and SOA remain)"
+        exit 0
+      fi
+      
+      echo "Found $RECORD_COUNT record(s) to delete"
+      
+      if command -v jq &> /dev/null; then
+        # Build change batch using jq
+        CHANGE_BATCH=$(echo "$ALL_RECORDS" | jq '{
+          Changes: [.[] | {
+            Action: "DELETE",
+            ResourceRecordSet: ({
+              Name: .Name,
+              Type: .Type,
+              TTL: (.TTL // 300),
+              ResourceRecords: (.ResourceRecords // []),
+              AliasTarget: (.AliasTarget // empty),
+              SetIdentifier: (.SetIdentifier // empty),
+              Weight: (.Weight // empty),
+              Region: (.Region // empty),
+              Failover: (.Failover // empty),
+              MultiValueAnswer: (.MultiValueAnswer // empty),
+              HealthCheckId: (.HealthCheckId // empty),
+              TrafficPolicyInstanceId: (.TrafficPolicyInstanceId // empty)
+            } | with_entries(select(.value != null and .value != [])))
+          }]
+        }' 2>/dev/null)
+        
+        if [ -n "$CHANGE_BATCH" ] && [ "$CHANGE_BATCH" != "{}" ]; then
+          TEMP_FILE=$(mktemp)
+          echo "$CHANGE_BATCH" > "$TEMP_FILE"
+          
+          CHANGE_ID=$(aws route53 change-resource-record-sets \
+            --hosted-zone-id "$ZONE_ID" \
+            --change-batch "file://$TEMP_FILE" \
+            --query 'ChangeInfo.Id' \
+            --output text 2>/dev/null || echo "")
+          
+          rm -f "$TEMP_FILE"
+          
+          if [ -n "$CHANGE_ID" ]; then
+            echo "Record deletion initiated (Change ID: $CHANGE_ID)"
+            echo "Waiting for deletion to complete..."
+            
+            # Wait for change to complete (max 2 minutes)
+            for i in {1..24}; do
+              STATUS=$(aws route53 get-change --id "$CHANGE_ID" --query 'ChangeInfo.Status' --output text 2>/dev/null || echo "PENDING")
+              if [ "$STATUS" = "INSYNC" ]; then
+                echo "Records deleted successfully"
+                break
+              fi
+              if [ $i -eq 24 ]; then
+                echo "Deletion still in progress (waited 2 minutes)"
+              else
+                sleep 5
+              fi
+            done
+          fi
+        fi
+      else
+        echo "Warning: jq not available, cannot delete records automatically"
+        echo "Please delete records manually before destroying hosted zone"
+      fi
+    EOT
+    interpreter = ["/bin/bash", "-c"]
+  }
+
+  depends_on = [aws_route53_zone.domain]
+}
+
 # Use the created zone
 locals {
   route53_zone_id = var.domain_name != "" && length(aws_route53_zone.domain) > 0 ? aws_route53_zone.domain[0].zone_id : ""
