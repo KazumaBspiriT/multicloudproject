@@ -2,7 +2,7 @@
 
 Deploy containerized applications across AWS, Azure, and GCP using Terraform and Ansible. Supports three deployment modes: Kubernetes (EKS/GKE), Container Services (App Runner/Cloud Run/ACI), and Static Websites (S3/Storage/CloudFront).
 
-## ⚡ Quick Start
+##  Quick Start
 
 ### Local Deployment
 ```bash
@@ -23,7 +23,7 @@ Deploy containerized applications across AWS, Azure, and GCP using Terraform and
 - `GCP_SA_KEY` (for GCP deployments)
 - `ARM_CLIENT_ID`, `ARM_CLIENT_SECRET`, `ARM_SUBSCRIPTION_ID`, `ARM_TENANT_ID` (for Azure deployments)
 
-## 🚀 Features
+##  Features
 
 - **Multi-Cloud Support**: Deploy to AWS, Azure, and GCP simultaneously
 - **Three Deployment Modes**:
@@ -34,7 +34,7 @@ Deploy containerized applications across AWS, Azure, and GCP using Terraform and
 - **Cost Optimization**: NAT Gateway disabled by default (~$32/month savings)
 - **Automated Image Mirroring**: Auto-mirrors Docker Hub images to private registries (ECR/ACR)
 
-## 📋 Prerequisites
+## Prerequisites
 
 ### Local Deployment
 
@@ -79,7 +79,7 @@ Deploy containerized applications across AWS, Azure, and GCP using Terraform and
 
 The pipeline automatically installs all tools. You only need to configure **GitHub Secrets**.
 
-## 🔐 GitHub Actions Setup
+##  GitHub Actions Setup
 
 ### Required Secrets
 
@@ -145,7 +145,7 @@ az account show --query id -o tsv  # This is ARM_SUBSCRIPTION_ID
 
 Add all four values to GitHub Secrets.
 
-## 🎯 Usage
+## Usage
 
 ### Container Image Requirements
 
@@ -404,8 +404,8 @@ Enable NAT Gateway: false
 - **For Azure**: `ARM_CLIENT_ID`, `ARM_CLIENT_SECRET`, `ARM_SUBSCRIPTION_ID`, `ARM_TENANT_ID` (if deploying to Azure)
 
 The validation step runs automatically at the start of the pipeline and will show:
-- ✅ Which secrets are configured
-- ❌ Which secrets are missing
+-  Which secrets are configured
+-  Which secrets are missing
 - Clear instructions on where to configure them
 
 #### How to Trigger
@@ -478,17 +478,17 @@ The validation step runs automatically at the start of the pipeline and will sho
 ### DNS Setup by Cloud Provider
 
 **AWS (All Modes):**
-- ✅ **Fully Automated**: Route 53 hosted zone, DNS records, SSL certificates
-- ✅ **Automatic Nameserver Update**: For Route 53 registered domains
-- ✅ **Certificate Validation**: Automatic via Route 53 DNS validation
+- **Fully Automated**: Route 53 hosted zone, DNS records, SSL certificates
+- **Automatic Nameserver Update**: For Route 53 registered domains
+- **Certificate Validation**: Automatic via Route 53 DNS validation
 
 **GCP (Container/Static):**
-- ⚠️ **Manual Domain Verification**: Required for Cloud Run custom domains
-- ✅ **Automatic DNS Records**: Created in Route 53 (if AWS is also deployed)
+- Manul Domain Verification**: Required for Cloud Run custom domains
+- **Automatic DNS Records**: Created in Route 53 (if AWS is also deployed)
 
 **Azure (Container/Static):**
-- ✅ **Automatic DNS Records**: Created in Route 53 (if AWS is also deployed)
-- ⚠️ **Azure k8s (AKS)**: **Not currently supported** - DNS/SSL setup not implemented
+- **Automatic DNS Records**: Created in Route 53 (if AWS is also deployed)
+- **Azure k8s (AKS)**: **Not currently supported** - DNS/SSL setup not implemented
 
 ### DNS Setup Details
 
@@ -517,7 +517,7 @@ The project uses subdomains for multi-cloud deployments:
 
 This allows you to access the same application deployed across all three clouds via different subdomains.
 
-## 💰 Cost Optimization
+## Cost Optimization
 
 ### NAT Gateway (Disabled by Default)
 
@@ -544,19 +544,19 @@ This allows you to access the same application deployed across all three clouds 
 - Azure Storage: ~$0.0184/GB/month
 - GCP Storage: ~$0.020/GB/month
 
-## 🏗️ Architecture
+## Architecture
 
 ### Deployment Modes
 
 #### Kubernetes (k8s)
 - **AWS**: EKS cluster with managed node groups
-  - ✅ **Custom Domain Support**: Route 53, ACM certificates, ALB Ingress
-  - ✅ **Automatic DNS**: DNS records and certificate validation
+  - **Custom Domain Support**: Route 53, ACM certificates, ALB Ingress
+  - **Automatic DNS**: DNS records and certificate validation
 - **GCP**: GKE cluster (autopilot or standard)
-  - ⚠️ **Custom Domain**: Manual setup required (see GCP Cloud Run domain verification)
+  - **Custom Domain**: Manual setup required (see GCP Cloud Run domain verification)
 - **Azure**: AKS cluster
-  - ⚠️ **Custom Domain**: **Not currently supported** - DNS/SSL setup not implemented
-  - ℹ️ **Note**: AKS cluster is created, but domain configuration requires:
+  - **Custom Domain**: **Not currently supported** - DNS/SSL setup not implemented
+  - **Note**: AKS cluster is created, but domain configuration requires:
     - Azure DNS zone or external DNS provider
     - Application Gateway Ingress Controller (AGIC) or NGINX Ingress
     - SSL certificate (Azure Key Vault or Let's Encrypt)
@@ -579,7 +579,7 @@ This allows you to access the same application deployed across all three clouds 
   - **Auto-creation**: Directory is created automatically if missing (with sample content)
   - **SPA Routing**: Already configured to serve `index.html` for all routes (supports client-side routing)
 
-## 🛣️ Application Routing
+## Application Routing
 
 ### How Routes Work
 
@@ -675,14 +675,14 @@ If you deploy a portfolio app with routes like:
 
 The `deploy.sh` script automatically checks prerequisites. If something is missing, it will show installation instructions.
 
-## 📚 Additional Resources
+## Additional Resources
 
 - [Terraform AWS Provider Docs](https://registry.terraform.io/providers/hashicorp/aws/latest/docs)
 - [Terraform Azure Provider Docs](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs)
 - [Terraform GCP Provider Docs](https://registry.terraform.io/providers/hashicorp/google/latest/docs)
 - [Ansible Kubernetes Collection](https://docs.ansible.com/ansible/latest/collections/kubernetes/core/)
 
-## 🤝 Contributing
+## Contributing
 
 1. Fork the repository
 2. Create a feature branch
@@ -690,11 +690,11 @@ The `deploy.sh` script automatically checks prerequisites. If something is missi
 4. Test locally and via pipeline
 5. Submit a pull request
 
-## 📝 License
+## License
 
 This project is open source and available under the MIT License.
 
-## 🆘 Support
+## Support
 
 For issues or questions:
 1. Check the [Troubleshooting](#-troubleshooting) section
